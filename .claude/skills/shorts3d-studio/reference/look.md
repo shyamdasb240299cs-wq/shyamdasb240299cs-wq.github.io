@@ -17,7 +17,8 @@ skin against cool backgrounds, shallow depth of field in close-ups, wide-angle c
 | `--q` | engine | use | cost |
 |---|---|---|---|
 | `sheet` | EEVEE 40 %, 12 spp | 3 stills/shot to review composition, acting, contacts | seconds/still on a GPU |
-| `blocking` | Workbench | full-motion timing check, very fast | ~0.1 s/frame |
+| `blocking` | Workbench 50 % | full-motion timing check, very fast | ~0.1–0.3 s/frame |
+| `draft` | EEVEE 35 %, 8 spp | look + motion draft | fast on GPU |
 | `preview` | EEVEE 50 % | full video draft with captions & audio | fast |
 | `final` | EEVEE 100 %, 64 spp, raytracing, motion blur | publish | ~1–4 s/frame on a modern GPU |
 | `cycles` | Cycles GPU, 96 spp adaptive + OIDN denoise | macro/glass/liquids/skin hero shots (`--shots`) | 10–60 s/frame |

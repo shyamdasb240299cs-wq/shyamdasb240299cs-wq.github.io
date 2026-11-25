@@ -269,7 +269,7 @@ def main():
             anchors.setdefault(sh["id"], {})[ov["anchor"]] = track
     json.dump(anchors, open(os.path.join(out, f"anchors_{scene_name}.json"), "w"))
     # render
-    q = {"sheet": "preview", "blocking": "blocking", "preview": "preview", "final": "final", "cycles": "cycles"}[quality]
+    q = {"sheet": "preview", "blocking": "blocking", "draft": "draft", "preview": "preview", "final": "final", "cycles": "cycles"}[quality]
     sets.render(q, tuple(plan.get("res", (1080, 1920))), fps)
     if quality == "sheet":
         sc.render.resolution_percentage = int(opts.get("pct", 40))

@@ -48,8 +48,12 @@ def kokoro(text, out, voice, speed):
         for r in pipe(sent, voice=voice, speed=speed):
             a = r.audio.numpy() if hasattr(r.audio, "numpy") else np.asarray(r.audio)
             for tok in (r.tokens or []):
-                if getattr(tok, "start_ts", None) is not None and re.search(r"\w", tok.text):
+                if getattr(tok, "start_ts", None) is None:
+                    continue
+                if re.search(r"\w", tok.text):
                     words.append({"w": tok.text, "s": round(off + tok.start_ts, 3), "e": round(off + tok.end_ts, 3)})
+                elif words and tok.text.strip():  # keep punctuation on the previous word (caption line breaks)
+                    words[-1]["w"] += tok.text.strip()
             audio.append(a); off += len(a) / SR
         gap = 0.12 if sent.endswith((".", "!")) else 0.08
         audio.append(np.zeros(int(SR * gap), dtype=np.float32)); off += gap

@@ -129,9 +129,23 @@ class Character:
         else:
             self.mouth = Vector((self.eye_mid.x, self.eye_mid.y - 0.025, self.eye_mid.z - 0.085))
         self.mouth_rel_head = self.mouth - hd.head_local
-        # lips front plane (how far the lips stick out in front of the mouth socket), from the rest mesh
+        # true lip centre from the face itself: vertices that move most when the lips pucker
         self.lip_front = 0.012
         for o in self.meshes:
+            sk = o.data.shape_keys
+            kn = next((k for k in ("!ex-mouthPucker", "mouthPucker", "!ex-mouthFunnel", "mouthFunnel") if sk and k in sk.key_blocks), None)
+            if kn:
+                basis, key = sk.reference_key, sk.key_blocks[kn]
+                Mi = self.rig.matrix_world.inverted() @ o.matrix_world
+                disp = sorted(((key.data[i].co - basis.data[i].co).length, i) for i in range(len(basis.data)))[-60:]
+                if disp and disp[-1][0] > 1e-4:
+                    c = sum((Mi @ basis.data[i].co for _, i in disp), Vector()) / len(disp)
+                    self.mouth = c - self.fwd * 0.006      # just behind the lip surface
+                    self.mouth_rel_head = self.mouth - hd.head_local
+                    self.lip_front = 0.006
+                    self.lips_from_mesh = True
+                break
+        for o in ([] if getattr(self, "lips_from_mesh", False) else self.meshes):
             if o.get("s3d_part", "body") == "body" and len(o.data.vertices) > 5000:
                 Mi = self.rig.matrix_world.inverted() @ o.matrix_world
                 best = None

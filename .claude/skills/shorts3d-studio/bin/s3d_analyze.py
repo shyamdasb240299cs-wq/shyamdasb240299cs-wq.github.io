@@ -37,7 +37,12 @@ def analyze(video, out, fps=15):
     d = np.array([0.0] + [(cv2.compareHist(hs[i - 1], hs[i], cv2.HISTCMP_BHATTACHARYYA) if cv2 else
                            np.abs(hs[i] - hs[i - 1]).sum() / (hs[i].sum() + 1)) for i in range(1, n)])
     thr = max(0.28, np.median(d) + 4 * np.std(d[d < np.percentile(d, 95)]))
-    cuts = [0] + [i for i in range(1, n) if d[i] > thr and i - 0 > 2]
+    # second signal: pixel-difference spikes vs. a local median (catches cuts inside the same set/colours)
+    g = [f.mean(-1).astype(np.float32) for f in F]
+    pd = np.array([0.0] + [float(np.abs(g[i] - g[i - 1]).mean()) / 255 for i in range(1, n)])
+    loc = np.array([np.median(pd[max(0, i - 7):i + 8]) for i in range(n)])
+    spike = (pd > np.maximum(0.045, 5 * loc))
+    cuts = [0] + [i for i in range(1, n) if (d[i] > thr or (spike[i] and d[i] > 0.1)) and i - 0 > 2]
     cuts = [c for k, c in enumerate(cuts) if k == 0 or c - cuts[k - 1] >= 4] + [n]
     shots = []
     for a, b in zip(cuts[:-1], cuts[1:]):

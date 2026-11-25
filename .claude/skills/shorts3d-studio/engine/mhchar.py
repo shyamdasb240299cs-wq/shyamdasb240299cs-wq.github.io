@@ -161,8 +161,11 @@ def _set(node, name, val):
         node.inputs[name].default_value = val
 
 
-CLEAN = {  # third-party prints on CC0 clothes textures: (u0, v0, u1, v1) regions where coloured/dark marks are erased
-    "male_casualsuit06": [(0.0, 0.5, 1.0, 1.0)],
+CLEAN = {  # third-party prints on CC0 clothes textures: (u0, v0, u1, v1, mode) UV regions to clean
+    "male_casualsuit06": [(0.0, 0.5, 1.0, 1.0, "white")],
+    "male_casualsuit04": [(0.5, 0.5, 1.0, 1.0, "deviate")],
+    "female_casualsuit01": [(0.5, 0.5, 1.0, 1.0, "deviate")],
+    "female_casualsuit02": [(0.5, 0.5, 1.0, 1.0, "deviate")],
 }
 
 
@@ -171,12 +174,19 @@ def clean_texture(path, regions, out_dir):
     img = bpy.data.images.load(path, check_existing=False)
     w, h = img.size
     px = np.empty(w * h * 4, dtype=np.float32); img.pixels.foreach_get(px); px = px.reshape(h, w, 4)
-    for u0, v0, u1, v1 in regions:
+    for u0, v0, u1, v1, mode in regions:
         y0, y1, x0, x1 = int(v0 * h), int(v1 * h), int(u0 * w), int(u1 * w)
         reg = px[y0:y1, x0:x1, :3]
         mx, mn = reg.max(-1), reg.min(-1)
-        sat = (mx - mn) / np.maximum(mx, 1e-4)
-        bad = (sat > 0.1) | (mx < 0.78)
+        if mode == "white":  # white fabric: anything coloured or dark is a print
+            sat = (mx - mn) / np.maximum(mx, 1e-4)
+            bad = (sat > 0.1) | (mx < 0.78)
+        else:  # coloured fabric: anything far from the dominant fabric colour (ignoring background)
+            fab = reg[(mx - mn) > 0.12]
+            med = np.median(fab, axis=0) if len(fab) else np.median(reg.reshape(-1, 3), axis=0)
+            dist = np.linalg.norm(reg - med, axis=-1)
+            near_fabric = np.linalg.norm(reg - np.median(reg.reshape(-1, 3), axis=0), axis=-1) < 0.6
+            bad = (dist > 0.22) & (dist < 1.2) & ((mx - mn) > 0.05)
         good = reg[~bad]
         fill = np.median(good, axis=0) if len(good) else np.array([0.9, 0.9, 0.9])
         reg[bad] = fill

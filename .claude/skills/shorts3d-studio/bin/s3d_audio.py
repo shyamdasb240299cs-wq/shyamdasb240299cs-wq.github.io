@@ -46,6 +46,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                or (nxt and nxt["s"] - w["e"] > 0.35) or (nxt and nxt.get("shot") != w.get("shot") and len(cur) > 1))
         if brk:
             chunks.append(cur); cur = []
+    merged = []  # no orphan single-word cards
+    for ch in chunks:
+        if merged and len(ch) == 1 and len(merged[-1]) <= 3 and ch[0].get("shot") == merged[-1][-1].get("shot") \
+                and not re.search(r"[.!?]$", merged[-1][-1]["w"]):
+            merged[-1] = merged[-1] + ch
+        else:
+            merged.append(ch)
+    chunks = merged
     lines = []
     for k, ch in enumerate(chunks):
         s = ch[0]["s"] - 0.04
@@ -53,12 +61,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         parts = []
         for w in ch:
             t = re.sub(r"[{}\\]", "", w["w"]).strip()
+            t = re.sub(r"[,.:;\u2026]+$", "", t)  # genre captions show no trailing punctuation (keep ? and !)
             if re.sub(r"[^a-z0-9']", "", t.lower()) in emph:
                 parts.append(f"{{\\c{accent}}}{t}{{\\c&HFFFFFF&}}")
             else:
                 parts.append(t)
         txt = " ".join(parts)
-        txt = txt[:1].upper() + txt[1:] if cap.get("case", "sentence") == "sentence" else txt.upper() if cap.get("case") == "upper" else txt
+        starts = k == 0 or re.search(r"[.!?]$", chunks[k - 1][-1]["w"])
+        if cap.get("case", "sentence") == "sentence":
+            txt = (txt[:1].upper() + txt[1:]) if starts else (txt[:1].lower() + txt[1:] if not re.match(r"I\b|I'", txt) else txt)
+        elif cap.get("case") == "upper":
+            txt = txt.upper()
         pop = "{\\fad(25,0)\\fscx90\\fscy90\\t(0,90,\\fscx100\\fscy100)}"
         lines.append(f"Dialogue: 0,{_ass_time(s)},{_ass_time(e)},Cap,,0,0,0,,{pop}{txt}")
     open(out, "w", encoding="utf-8").write(head + "\n".join(lines) + "\n")
@@ -125,11 +138,24 @@ def mix(d, tl, events, sfx_dir, dur):
     if not parts:
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo", "-t", f"{dur:.3f}", out], check=True)
         return out
-    flt.append("".join(parts) + f"amix=inputs={len(parts)}:normalize=0,atrim=0:{dur:.3f},loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[out]")
+    flt.append("".join(parts) + f"amix=inputs={len(parts)}:normalize=0,atrim=0:{dur:.3f},aresample=48000[out]")
     fc = os.path.join(d, "build", "mix_filter.txt"); open(fc, "w").write(";\n".join(flt))
-    cmd = ["ffmpeg", "-y", "-loglevel", "error"] + ins + ["-filter_complex_script", fc, "-map", "[out]", "-ac", "2", out]
+    raw = os.path.join(d, "build", "mix_raw.wav")
+    cmd = ["ffmpeg", "-y", "-loglevel", "error"] + ins + ["-filter_complex_script", fc, "-map", "[out]", "-ac", "2", raw]
     if subprocess.run(cmd).returncode != 0:
         raise SystemExit("[s3d] audio mix failed (see build/mix_filter.txt)")
+    # master: measure integrated loudness, apply exact gain to -14 LUFS, peak-limit at -1.5 dBTP
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-i", raw, "-af", "ebur128", "-f", "null", "-"], capture_output=True, text=True)
+    m = re.findall(r"I:\s+(-?[\d.]+) LUFS", r.stderr)
+    gain = (-14.0 - float(m[-1])) if m else 0.0
+    comp = os.path.join(d, "build", "mix_comp.wav")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw, "-af", "acompressor=threshold=-20dB:ratio=3:attack=5:release=90:makeup=2",
+                    comp], check=True)
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-i", comp, "-af", "ebur128", "-f", "null", "-"], capture_output=True, text=True)
+    m = re.findall(r"I:\s+(-?[\d.]+) LUFS", r.stderr)
+    gain = (-13.6 - float(m[-1])) if m else 0.0
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", comp, "-af", f"volume={gain:.2f}dB,alimiter=limit=0.84:level=false",
+                    "-ar", "48000", out], check=True)
     return out
 
 

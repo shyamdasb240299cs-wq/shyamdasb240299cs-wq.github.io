@@ -33,7 +33,8 @@ things the spec already covers — that is where tokens and realism are lost.
 | 5 block | stills + QA | `build <slug> --q sheet` → Read `build/sheet.jpg` + QA lines → edit spec → repeat (≤3) |
 | 6 render | final frames | `build <slug> --q final` (EEVEE) · macro/glass/liquid shots: `--q cycles --shots ...` |
 | 7 finish | captions + VO + SFX + foley + music, -14 LUFS | `assemble <slug>` → `final.mp4`, `publish.txt` |
-Optional: `build --q blocking` (fast workbench motion check), `build --q preview` + `assemble` (timing check).
+Optional: `build --q blocking` (fast workbench motion/timing check), `--q draft` (EEVEE 35 %), `--q preview` (EEVEE 50 %);
+any quality + `assemble` gives a reviewable MP4. `--step 2` renders every 2nd frame (assembly holds frames) for quick drafts.
 Reference study: `analyze <video.mp4>` → `report.md` + `shots.jpg` + `hook.jpg` (cuts, pacing, camera moves, colours).
 
 ## Load only what you need

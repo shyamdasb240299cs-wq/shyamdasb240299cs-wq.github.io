@@ -476,7 +476,7 @@ def main():
         p = sp.add_parser(nm); p.add_argument("slug")
         if nm == "assemble": p.add_argument("--nocaps", action="store_true")
     p = sp.add_parser("build"); p.add_argument("slug"); p.add_argument("--q", default="sheet",
-                                                                     choices=["sheet", "blocking", "preview", "final", "cycles"])
+                                                                     choices=["sheet", "blocking", "draft", "preview", "final", "cycles"])
     p.add_argument("--shots"); p.add_argument("--scene"); p.add_argument("--jobs", type=int, default=1); p.add_argument("--step", type=int)
     p = sp.add_parser("analyze"); p.add_argument("video"); p.add_argument("--out")
     p = sp.add_parser("assets"); p.add_argument("query"); p.add_argument("--hdri", action="store_true"); p.add_argument("-n", type=int, default=12)

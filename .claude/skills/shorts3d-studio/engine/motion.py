@@ -495,11 +495,11 @@ class Performer:
         self.face.bite(tc)
         self.face.no_blink.append((t0, tc + 0.2))
         self.events.append({"type": "bite", "side": s, "prop": self.holding[s], "t": tc + 0.09, "t_contact": tc,
-                            "t_pre": mp.get("t_pre"), "t_hold": tc + 0.12, "t_away": tc + 0.5})
-        away = mp["w_contact"] + f * 0.09 - up * 0.045
-        self.hw[s].key(tc + 0.12, mp["w_contact"], "hold").key(tc + 0.5, away, "mj")
+                            "t_pre": mp.get("t_pre"), "t_hold": tc + 0.12, "t_away": tc + 0.6})
+        away = mp["w_contact"] + f * 0.14 - up * 0.16   # food comes down to chest height while chewing
+        self.hw[s].key(tc + 0.12, mp["w_contact"], "hold").key(tc + 0.6, away, "mj")
         self._mouth_plan = None
-        return tc + 0.5
+        return tc + 0.6
 
     def v_chew(self, t0, a):
         n = int(a.get("cycles", 4))
@@ -890,7 +890,7 @@ class Performer:
             w_p = (m_p + f_p * (self.ch.lip_front + 0.03)) - qm @ bl - up * 0.008
             self.hw[s].set_at(ev["t_pre"], w_p); self.hq[s].set_at(ev["t_pre"], qm)
             self.hw[s].set_at(ev["t_contact"], w_c); self.hw[s].set_at(ev["t_hold"], w_c)
-            self.hw[s].set_at(ev["t_away"], w_c + f_c * 0.09 - up * 0.045)
+            self.hw[s].set_at(ev["t_away"], w_c + f_c * 0.14 - up * 0.16)
             ev["mouth"] = contact
             log(f"bite: exact mouth contact solved (lips {self.ch.lip_front*1000:.0f} mm ahead of mouth joint)")
             changed = True
