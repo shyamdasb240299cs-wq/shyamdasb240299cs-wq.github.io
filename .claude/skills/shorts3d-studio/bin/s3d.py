@@ -307,7 +307,9 @@ def cmd_doctor(a):
             ("human data", "ok" if os.path.exists(os.path.join(c["mh_data"], "3dobjs", "base.obj")) else "missing -> s3d.py setup"),
             ("face units", "ok" if os.path.isdir(os.path.join(c["mh_assets"], "targets", "faceunits")) else "missing -> s3d.py setup"),
             ("characters", ", ".join(sorted({os.path.splitext(os.path.basename(p))[0] for p in glob.glob(os.path.join(c["chars"], "*.json")) + glob.glob(os.path.join(c["chars"], "*.blend"))})) or "none"),
-            ("brand", brand(c)["name"] + " " + brand(c)["color"])]
+            ("brand", brand(c)["name"] + " " + brand(c)["color"]),
+            ("mocap clips", f"{len({os.path.basename(p).split('.')[0] for p in glob.glob(os.path.join(c['clips'], '*'))})} installed" if os.path.isdir(c["clips"]) else "none -> s3d.py setup"),
+            ("gpu", (lambda g: f"{g.get('gpu') or g.get('backend')} tier {g.get('tier')}" if g else "not checked -> s3d.py gpu --bench")(c.get("gpu")))]
     tp = c["tts"].get("python", sys.executable)
     for mod in ("kokoro", "edge_tts", "faster_whisper"):
         r = subprocess.run([tp, "-c", f"import {mod}"], capture_output=True)
