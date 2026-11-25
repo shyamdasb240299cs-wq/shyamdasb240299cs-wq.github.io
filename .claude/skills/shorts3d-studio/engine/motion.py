@@ -43,6 +43,7 @@ class Performer:
         self.hbq = {s: Track(Quaternion()) for s in "LR"}
         self.hbw = {s: Track(0.0) for s in "LR"}
         self.hcorr = {s: Track(Vector((0, 0, 0))) for s in "LR"}
+        self.pole_out = {s: Track(0.0) for s in "LR"}  # 1 = elbow flares outward (hands on hips, crossed arms)
         self.curl = {s: {f: Track(v) for f, v in RELAX.items()} for s in "LR"}
         self.spread = {s: Track(0.0) for s in "LR"}
         eye = self._to_world(ch.eye_mid, start, yaw)
@@ -563,54 +564,76 @@ class Performer:
         return t0 + T
 
     # ------------------------------------------------------------ body-space gestures
-    def _gesture(self, s, t0, T_in, hold, wrist_arm_off, palm, fingers, curls, T_out=0.5, osc=None):
-        """Move hand s to a body-space pose (offset from shoulder, armature space), hold, return."""
+    def _gesture(self, s, t0, T_in, hold, wrist_arm_off, palm, fingers, curls, T_out=0.5, osc=None,
+                 absolute=False, pole_out=0.0, look=None):
+        """Move hand s to a pose, hold, return. wrist_arm_off: offset from the shoulder (armature space), or an
+        absolute armature-space point (absolute=True), or a callable(t)->armature point (head-relative poses)."""
         ch = self.ch; sh = ch.arm_head(f"upperarm.{s}")
-        w_rest, _ = self.rest_hand(s, t0)
-        target = sh + Vector(wrist_arm_off)
-        q = ch.hand_world_rot(s, Vector(palm), Vector(fingers))
         t1, t2 = t0 + T_in, t0 + T_in + hold
-        self.hb[s].key(t0, self.hb[s].at(t0), "hold").key(t1, target - w_rest, "mj").key(t2, target - w_rest, "hold")
+        if callable(wrist_arm_off):
+            target = wrist_arm_off(t1)
+        else:
+            target = Vector(wrist_arm_off) if absolute else sh + Vector(wrist_arm_off)
+        w_rest, _ = self.rest_hand(s, t1)
+        q = ch.hand_world_rot(s, Vector(palm), Vector(fingers))
+        off = target - w_rest
+        self.hb[s].key(t0, self.hb[s].at(t0), "hold").key(t1, off, "mj").key(t2, off, "hold")
         self.hbq[s].key(t1, q, "hold"); self.hbw[s].key(t0, self.hbw[s].at(t0), "hold").key(t1, 1.0, "mj").key(t2, 1.0, "hold")
+        if pole_out:
+            self.pole_out[s].key(t0, self.pole_out[s].at(t0), "hold").key(t1, pole_out, "mj").key(t2, pole_out, "hold")
         if osc:
             amp, hz, axis = osc
             k = 0; tt = t1
             while tt < t2:
-                self.hb[s].key(tt, target - w_rest + Vector(axis) * amp * (1 if k % 2 else -1), "smooth")
+                self.hb[s].key(tt, off + Vector(axis) * amp * (1 if k % 2 else -1), "smooth")
                 tt += 0.5 / hz; k += 1
-            self.hb[s].key(t2, target - w_rest, "smooth")
+            self.hb[s].key(t2, off, "smooth")
         for f, c in curls.items():
             self.curl[s][f].key(t0, self.curl[s][f].at(t0), "hold").key(t1, c, "smooth").key(t2, c, "hold")
+        if look is not None:
+            self._look_to(t0, look)
         if T_out:
             self.hb[s].key(t2 + T_out, Vector(), "mj"); self.hbw[s].key(t2 + T_out, 0.0, "mj")
+            if pole_out:
+                self.pole_out[s].key(t2 + T_out, 0.0, "mj")
             for f, c in RELAX.items():
                 self.curl[s][f].key(t2 + T_out, c, "smooth")
+            if look is not None:
+                self._look_ahead(t2 + 0.1)
         return t2 + (T_out or 0)
+
+    def _look_ahead(self, t):
+        self._look_to(t, self.head_point(t, self.ch.eye_mid) + self.fwd(t) * 2.5)
+
+    def _head_pose(self, p_arm):
+        """Callable for head-relative gesture targets (follows nod/lean): armature point at time t."""
+        def f(t):
+            return self.M(t).inverted() @ self.head_point(t, p_arm)
+        return f
 
     def _sg(self, s):
         return 1 if s == "L" else -1
 
     def v_point(self, t0, a):
-        s = (a.get("hand") or "R")[0].upper()
         p = self._target_point(a["target"])
+        s = (a.get("hand") or self._side_for(p, t0))[0].upper()
         loc = self.M(t0).inverted() @ p
         sh = self.ch.arm_head(f"upperarm.{s}")
         d = (loc - sh).normalized()
-        self._look_to(t0, p)
-        return self._gesture(s, t0, 0.45, float(a.get("hold", 1.2)), d * self.ch.arm_len * 0.85,
-                             Vector((0, 0, -1)).cross(d).cross(d) * -1 + Vector((0, 0, -0.3)), d,
-                             {"thumb": .55, "index": .0, "middle": .95, "ring": 1, "pinky": 1})
+        palm = (Vector((0, 0, -1)) - d * d.z).normalized() if abs(d.z) < 0.95 else Vector((0, -1, 0))
+        return self._gesture(s, t0, 0.45, float(a.get("hold", 1.2)), d * self.ch.arm_len * 0.86, palm, d,
+                             {"thumb": .55, "index": .0, "middle": .95, "ring": 1, "pinky": 1}, look=p)
 
     def v_wave(self, t0, a):
         s = (a.get("hand") or "R")[0].upper(); g = self._sg(s)
         self.face.expr("happy", t0, t0 + float(a.get("hold", 1.4)) + 0.4)
-        return self._gesture(s, t0, 0.4, float(a.get("hold", 1.4)), (g * 0.28, -0.1, 0.22), (0, -1, 0), (0, 0, 1),
+        return self._gesture(s, t0, 0.4, float(a.get("hold", 1.4)), (g * 0.24, -0.08, 0.2), (0, -1, 0), (0, 0, 1),
                              OPEN, osc=(0.06, 2.2, (g, 0, 0)))
 
     def v_thumbs_up(self, t0, a):
         s = (a.get("hand") or "R")[0].upper(); g = self._sg(s)
         self.face.expr("happy", t0, t0 + 1.6)
-        return self._gesture(s, t0, 0.4, float(a.get("hold", 1.2)), (g * 0.1, -0.38, -0.3), (-g, 0, 0), (0, -1, 0.1),
+        return self._gesture(s, t0, 0.4, float(a.get("hold", 1.2)), (-g * 0.06, -0.3, -0.34), (-g, 0, 0), (0, -1, 0.15),
                              {"thumb": 0.0, "index": 1, "middle": 1, "ring": 1, "pinky": 1})
 
     def v_shrug(self, t0, a):
@@ -620,28 +643,38 @@ class Performer:
         self.face.expr(a.get("expr", "confused"), t0, t0 + 0.3 + hold)
         for s in "LR":
             g = self._sg(s)
-            t = self._gesture(s, t0, 0.35, hold, (g * 0.25, -0.22, -0.36), (0, 0, 1), (g * 0.6, -0.8, 0), OPEN)
+            t = self._gesture(s, t0, 0.35, hold, (g * 0.16, -0.24, -0.38), (0, 0, 1), (g * 0.5, -0.85, 0), OPEN)
         return t
 
     def v_facepalm(self, t0, a):
-        s = (a.get("hand") or "R")[0].upper()
-        fh = self.ch.eye_mid + Vector((0, -0.07, 0.05)); sh = self.ch.arm_head(f"upperarm.{s}")
-        self.nod.key(t0, 0, "hold").key(t0 + 0.4, math.radians(14), "smooth").key(t0 + 1.6, math.radians(14), "hold").key(t0 + 2.0, 0, "smooth")
+        s = (a.get("hand") or "R")[0].upper(); g = self._sg(s)
+        ch = self.ch
+        self.nod.key(t0, 0, "hold").key(t0 + 0.4, math.radians(12), "smooth").key(t0 + 1.6, math.radians(12), "hold").key(t0 + 2.0, 0, "smooth")
         self.face.expr("embarrassed", t0, t0 + 1.8)
-        return self._gesture(s, t0, 0.45, float(a.get("hold", 1.1)), fh - sh, (0, 1, 0), (0, 0, 1), RELAX)
+        palm_n = Vector((0, 1, 0)); fing = Vector((-g * 0.35, 0, 1)).normalized()
+        q = ch.hand_world_rot(s, palm_n, fing)
+        hc = ch.hand[s]
+        palm_pt = ch.eye_mid + Vector((0, -0.10, 0.045))          # just in front of the forehead
+        wrist = palm_pt - q @ hc["palm_center_l"] - (q @ hc["palm_l"]) * hc["palm_thick"]
+        return self._gesture(s, t0, 0.45, float(a.get("hold", 1.1)), self._head_pose(wrist), palm_n, fing, RELAX, pole_out=0.3)
 
     def v_hands_on_hips(self, t0, a):
-        hold = float(a.get("hold", 1.5)); t = t0
+        hold = float(a.get("hold", 1.5)); t = t0; ch = self.ch
         for s in "LR":
             g = self._sg(s)
-            t = self._gesture(s, t0, 0.5, hold, (g * 0.07, 0.02, -0.5), (-g, 0, 0), (0, -0.3, -1), FIST)
+            th = ch.arm_head(f"thigh.{s}")
+            w = Vector((th.x + g * 0.12, th.y + 0.01, ch.hips_h + 0.06))
+            t = self._gesture(s, t0, 0.5, hold, w, (-g, 0.2, 0), (0, -0.25, -1), FIST, absolute=True, pole_out=1.0)
         return t
 
     def v_cross_arms(self, t0, a):
-        hold = float(a.get("hold", 1.5)); t = t0
+        hold = float(a.get("hold", 1.5)); t = t0; ch = self.ch
+        sh = (ch.arm_head("upperarm.L") + ch.arm_head("upperarm.R")) / 2
         for s in "LR":
             g = self._sg(s)
-            t = self._gesture(s, t0, 0.55, hold, (-g * 0.33, -0.2, -0.33 + (0.03 if s == "R" else 0)), (0, 1, 0), (-g, 0, 0), RELAX)
+            # elbows bent ~100 deg: wrists meet in front of the lower chest, R forearm on top
+            w = Vector((-g * 0.015, sh.y - (0.21 if s == "L" else 0.25), sh.z - (0.29 if s == "L" else 0.26)))
+            t = self._gesture(s, t0, 0.55, hold, w, (0, 1, 0), (-g, 0, 0.1), RELAX, absolute=True, pole_out=0.25)
         self.face.expr(a.get("expr", "skeptical"), t0, t0 + hold + 0.5)
         return t
 
@@ -812,7 +845,9 @@ class Performer:
         M = self.M(t)
         wl = M.inverted() @ wrist
         u = smooth((wl.z - (sh.z - 0.45)) / 0.45)  # 0 = arm hanging, 1 = hand raised (to mouth/face)
-        return M @ Vector((sh.x + g * (0.04 + 0.3 * u), sh.y + 0.55 * (1 - u) + 0.05, sh.z - 0.3 - 0.15 * u))
+        po = self.pole_out[s].at(t)
+        return M @ Vector((sh.x + g * (0.04 + 0.3 * u + 0.55 * po), sh.y + 0.55 * (1 - u) * (1 - po) + 0.05 + 0.1 * po,
+                           sh.z - 0.3 - 0.15 * u + 0.05 * po))
 
     def _bake_fingers(self, kw, frames):
         rig = self.ch.rig

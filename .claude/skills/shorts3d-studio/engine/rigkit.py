@@ -54,8 +54,9 @@ def _basis(local_a, world_a, local_b, world_b):
 
 
 def signed_angle(a, b, n):
+    """Blender IK pole-angle convention: negative when (a x b) points along n."""
     ang = a.angle(b, 0.0)
-    return -ang if a.cross(b).dot(n) < 0 else ang
+    return -ang if a.cross(b).dot(n) > 0 else ang
 
 
 class Character:
@@ -252,6 +253,10 @@ class Character:
             ik2.pole_angle = self._pole_angle(th, sh, kpole)
             cr2 = pb[ft.name].constraints.new("COPY_ROTATION"); cr2.name = "s3d_rot"; cr2.target = ftg
             self.ctrl[f"foot.{side}"], self.ctrl[f"pole_leg.{side}"] = ftg, kp
+        # numerically calibrate every pole angle: the rest pose must be reproduced exactly (works for any bone roll)
+        for side in "LR":
+            for chain, tip, mid in (("arm", f"hand.{side}", f"forearm.{side}"), ("leg", f"foot.{side}", f"shin.{side}")):
+                self._calibrate_pole(pb[self.b[mid]].constraints["s3d_ik"], self.b[mid])
         look = core.empty(f"{self.name}_look", rig.matrix_world @ (self.eye_mid + Vector((0, -2.0, 0))), c, 0.06, "SPHERE")
         gaze = core.empty(f"{self.name}_gaze", rig.matrix_world @ (self.eye_mid + Vector((0, -2.0, 0))), c, 0.03, "SPHERE")
         self.ctrl["look"], self.ctrl["gaze"] = look, gaze
@@ -265,6 +270,26 @@ class Character:
                 d = pb[e.name].constraints.new("DAMPED_TRACK"); d.name = "s3d_look"; d.target = gaze
                 d.track_axis = self.eye_track
         return self.ctrl
+
+    def _calibrate_pole(self, con, mid_bone):
+        """Pick the pole angle that keeps the joint (elbow/knee) exactly where it is in the rest pose."""
+        rig = self.rig; vl = bpy.context.view_layer
+        rest_joint = rig.matrix_world @ rig.data.bones[mid_bone].head_local
+        con.influence = 1.0
+
+        def err(ang):
+            con.pole_angle = ang; vl.update()
+            return (rig.matrix_world @ rig.pose.bones[mid_bone].head - rest_joint).length
+        best = min((err(math.radians(d)), d) for d in range(-180, 180, 10))
+        lo, hi = best[1] - 10, best[1] + 10
+        for _ in range(12):  # ternary refine
+            m1, m2 = lo + (hi - lo) / 3, hi - (hi - lo) / 3
+            if err(math.radians(m1)) < err(math.radians(m2)): hi = m2
+            else: lo = m1
+        con.pole_angle = math.radians((lo + hi) / 2); vl.update()
+        e = err(con.pole_angle)
+        if e > 0.01:
+            core.log(f"pole calibration {mid_bone}: residual {e*100:.1f} cm")
 
     @staticmethod
     def _pole_angle(base, tip, pole_loc):

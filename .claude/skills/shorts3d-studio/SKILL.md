@@ -30,7 +30,7 @@ things the spec already covers — that is where tokens and realism are lost.
 | 2 spec | `new <slug> --template explainer|howitworks|whatif` then edit `videos/<slug>/shots.yaml` | cheat-sheet below; full DSL `reference/spec.md` |
 | 3 voice | TTS + word timings | `voice <slug>` (Kokoro local default) |
 | 4 plan | time shots/actions from words | `plan <slug>` → fix any shot >4 s |
-| 5 block | stills + QA | `build <slug> --q sheet` → Read `build/sheet.jpg` + QA lines → edit spec → repeat (≤3) |
+| 5 block | stills + QA | `build <slug> --q sheet --fast` (solid shading, seconds: motion/contacts/framing) → Read `build/sheet.jpg` + QA → edit → repeat (≤3); then one `--q sheet` (real look: light, x-ray, glow) |
 | 6 render | final frames | `build <slug> --q final` (EEVEE) · macro/glass/liquid shots: `--q cycles --shots ...` |
 | 7 finish | captions + VO + SFX + foley + music, -14 LUFS | `assemble <slug>` → `final.mp4`, `publish.txt` |
 Optional: `build --q blocking` (fast workbench motion/timing check), `--q draft` (EEVEE 35 %), `--q preview` (EEVEE 50 %);
@@ -59,13 +59,13 @@ scenes:
   kitchen:                                                 # a scene = set + props + cast + performance
     set: {preset: kitchen|studio|room|outdoor|void, light: soft|bright|drama|night|xray, color: "#hex"}
     props:                                                 # src: proc:<table|plate|bread_slice|mug|phone|apple|coin|box>
-      table: {src: proc:table, at: [0, 0], surface: true}  #      poly:<polyhaven_id> · file:<path> · lib:<name>
+      table: {src: proc:table, at: [0, 0], surface: true}  #   proc:<gear|spring|coil|wire|pipe|outlet|plug|molecule|cell|…> (+params)
+                                                           #   poly:<polyhaven_id> · file:<path> · lib:<name>
       plate: {src: proc:plate, on: table, at: [0.05, -0.18]}
       bun:   {src: poly:hamburger_buns, size_cm: 11, on: plate, yaw: 20, label: front}
-    cast:  {hero: {char: hero, at: [-1.3, -1.6], face: table}}
+    cast:  {hero: {char: hero, at: [0.05, -0.64], face: table}}   # start AT the action: the hook needs hands at t=0
     script:                                                # runs in order; `at:` S03 | S03+0.4 | "w:word" | 2.5
-      - hero.walk_to: {target: bun, stop: reach}
-      - hero.reach: {target: bun, hand: R}     # then grasp → lift{to: mouth|show|chest} → bite → chew → swallow
+      - hero.reach: {target: bun, hand: R, at: 0.1}        # (walk_to {target, stop: reach} only in later shots)
       - hero.grasp: {prop: bun}
       - hero.lift: {to: mouth}
       - hero.bite: {}
@@ -75,8 +75,8 @@ shots:
   - id: S01
     scene: kitchen
     say: "If you leave bread out overnight, it turns *hard* as a rock."   # *word* = accent caption
-    cam: {size: insert, target: bun, angle: front_right, move: push_in}   # size: ecu cu mcu medium wide xwide insert macro
-    fx: [{type: arrow, from: hero.hand_R, to: bun}]                       # xray cutaway arrow label glow flow lightning crumbs
+    cam: {size: insert, target: bun, angle: right, move: push_in}         # size: ecu cu mcu medium wide xwide insert macro
+    fx: [{type: arrow, from: hero.hand_R, to: bun}]   # xray cutaway arrow label glow glass flow{along} lightning exploded crumbs
     sfx: [{name: whoosh, at: 0}]
 ```
 Verbs: walk_to turn_to look_at reach grasp lift bite chew swallow place release rest point wave thumbs_up shrug
@@ -94,3 +94,5 @@ sad angry thinking confused smirk satisfied determined embarrassed exhausted ske
 | subject under captions / cut off | change `size`, `angle`, `el`, or target `hero.face` |
 | shot boring | add motivated `move` (push_in on reveal, orbit on mechanism), FX, or split the beat |
 | feels robotic | add `face`, `look_at`, a gesture; vary timings with `delay`; let actions overlap with `with: prev` |
+| blank/grey mechanism shot | parts hidden inside an opaque prop → put them in the open (inside scene) or `glass` the shell |
+| hook frame empty | actor must start where the action happens; `reach … at: 0.1`, camera `insert`/`pov` on the object |
