@@ -16,6 +16,9 @@ still decide in `shots.yaml`. Check here before writing new bpy code - most "new
 | Hand passes through bread / fingers inside prop | no contact model | finger sweep vs prop BVH, palm backs off, penetration guard | give props real `size_cm` |
 | Hand can't reach; actor stands inside the table | target outside arm length; stand point inside footprint | reach posture search (lean <= 60 deg, crouch <= 32 cm); stand point outside furniture + detour | start the actor at the action (`at:` near the table edge) |
 | Bun misses the mouth / bite in the air | mouth position estimated, not measured | deferred exact mouth solve; lips from the pucker shape key | `lift: {to: mouth}` then `bite` (never place food by coordinates) |
+| Palm turns outward at every bite | the deferred mouth solve rebuilt the hand rotation with a flipped 'inward' sign | one shared `_mouth_rot()` for planning and the exact solve | - |
+| Bread slice tilted up across the nose | flat food oriented like a burger | flat foods (`pinch_edge`) are bitten level, palm on top, edge into the mouth | thin items: keep `grip: auto` (pinch_edge) |
+| Side-eye / whites of the eyes showing | gaze stayed on a near target after the bite; eyes had no range limit | `_clamp_gaze`: eyes within 26 deg sideways / 14 up / 20 down of the head, focus >= 35 cm; eyes leave the food after the bite | `look_at` the camera-side target after eating |
 | Torn trousers, floating shoes (MakeHuman) | helper geometry had zero weights | nearest-body weight transfer | - |
 | Every face key at full strength (Blender 5.x) | new shape keys default to 1.0 | all keys reset to 0 on import | - |
 | Weak smiles on asset faces | small shape-key amplitudes | `face_gain` measured from the smile key (x1.0-1.6) | `face: {amt: 1.2}` for phone readability |

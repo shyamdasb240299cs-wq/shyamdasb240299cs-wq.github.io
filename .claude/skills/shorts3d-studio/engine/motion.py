@@ -570,6 +570,16 @@ class Performer:
                 bd, best = score, pl
         return best
 
+    @staticmethod
+    def _mouth_rot(bl, pl, f, inward, grip_type):
+        """Hand rotation that brings the bite point to the mouth: flat foods level with the palm on top,
+        others palm up/inward like a burger. inward = toward the body midline for THIS hand."""
+        from .rigkit import _basis
+        up = Vector((0, 0, 1))
+        if grip_type == "pinch_edge":
+            return _basis(bl.normalized(), (-f + up * 0.12).normalized(), pl, (-up * 0.85 + inward * 0.35).normalized())
+        return _basis(bl.normalized(), (-f + up * 0.22).normalized(), pl, (up * 0.6 + inward * 0.8).normalized())
+
     def v_lift(self, t0, a):
         s = a.get("hand") or ("R" if self.holding["R"] else "L")
         s = s[0].upper()
@@ -586,7 +596,7 @@ class Performer:
             qm = Quaternion()
             # orient: bite direction points back toward the face; palm faces up/inward
             from .rigkit import _basis
-            qm = _basis(bl.normalized(), (-f + up * 0.25).normalized(), pl, (up * 0.6 + inward * 0.8).normalized())
+            qm = self._mouth_rot(bl, pl, f, inward, g.get("grip", {}).get("type"))
             tm = t0 + T
             mouth = self.mouth_world(tm)
             contact = mouth + f * 0.006
@@ -631,6 +641,7 @@ class Performer:
         self.events.append({"type": "bite", "side": s, "prop": self.holding[s], "t": tc + 0.09, "t_contact": tc,
                             "t_pre": mp.get("t_pre"), "t_hold": tc + 0.12, "t_away": tc + 0.6})
         away = mp["w_contact"] + f * 0.14 - up * 0.16   # food comes down to chest height while chewing
+        self._look_ahead(tc + 0.25)                       # eyes leave the food once it is in the mouth
         self.hw[s].key(tc + 0.12, mp["w_contact"], "hold").key(tc + 0.6, away, "mj")
         self._mouth_plan = None
         return tc + 0.6
@@ -965,6 +976,7 @@ class Performer:
                 kw.put(ch.ctrl[f"pole_arm.{s}"], "location", f, self._elbow_pole(s, t, w))
             look = self.look.at(t)
             gz = self.gaze.at(t) + Vector((self.noise(t * 1.7 + 40) * 0.012, 0, self.noise(t * 1.3 + 80) * 0.008)) * (look - M.translation).length
+            gz = self._clamp_gaze(t, gz, look)
             kw.put(ch.ctrl["look"], "location", f, look)
             kw.put(ch.ctrl["gaze"], "location", f, gz)
             for k in face_keys:
@@ -974,6 +986,32 @@ class Performer:
                 for (skd, kname) in ch.face.get(k, []):
                     kw.put(skd, f'key_blocks["{kname}"].value', f, v)
         self._bake_fingers(kw, frames)
+
+    EYE = {"yaw": 26, "up": 14, "down": 20, "near": 0.35}  # deg from where the head points; min focus distance (m)
+
+    def _clamp_gaze(self, t, gz, look):
+        """Keep the eyes inside their real range relative to the (look-tracking) head; the head does the rest."""
+        eye = self.head_point(t, self.ch.eye_mid)
+        hq = self.M(t).to_quaternion() @ self.deltas_at(t).get(self.ch.b["head"], Quaternion())
+        lk = look - eye
+        hf = (hq @ Vector((0, -1, 0))).lerp(lk.normalized() if lk.length > 1e-6 else hq @ Vector((0, -1, 0)), 0.7).normalized()
+        g = gz - eye; dist = g.length
+        if dist < 1e-6:
+            return gz
+        gd = g / dist
+        side = hf.cross(Vector((0, 0, 1)))
+        if side.length < 1e-6:
+            return gz
+        side.normalize(); upv = side.cross(hf).normalized()
+        x, y, z = gd.dot(hf), gd.dot(side), gd.dot(upv)
+        yaw, pitch = math.atan2(y, x), math.atan2(z, math.hypot(x, y))
+        E = self.EYE
+        yc = clamp(yaw, -math.radians(E["yaw"]), math.radians(E["yaw"]))
+        pc = clamp(pitch, -math.radians(E["down"]), math.radians(E["up"]))
+        if abs(yc - yaw) < 1e-4 and abs(pc - pitch) < 1e-4 and dist >= E["near"]:
+            return gz
+        nd = hf * (math.cos(pc) * math.cos(yc)) + side * (math.cos(pc) * math.sin(yc)) + upv * math.sin(pc)
+        return eye + nd * max(dist, E["near"])
 
     def _spine_top(self, t):
         return Quaternion((1, 0, 0), self.lean.at(t) + self.back.at(t)) @ Quaternion((0, 0, 1), self.twist.at(t))
@@ -1074,8 +1112,10 @@ class Performer:
             up = Vector((0, 0, 1))
             m_c, f_c = mouth_at(ev["t_contact"])
             sg = 1 if s == "L" else -1
-            inward = (f_c.cross(up)).normalized() * sg * -1
-            qm = _basis(bl.normalized(), (-f_c + up * 0.2).normalized(), pl, (up * 0.6 + inward * 0.8).normalized())
+            inward = f_c.cross(up).normalized() * sg   # f x up = actor's right; R hand (sg -1) -> toward the midline
+            grip = next((e.get("grip", {}) for e in reversed(self.events) if e["type"] == "grip" and e["side"] == s
+                         and e["prop"] == ev["prop"]), {})
+            qm = self._mouth_rot(bl, pl, f_c, inward, grip.get("type"))
             contact = m_c + f_c * (self.ch.lip_front - 0.008)
             w_c = contact - qm @ bl
             m_p, f_p = mouth_at(ev["t_pre"])
