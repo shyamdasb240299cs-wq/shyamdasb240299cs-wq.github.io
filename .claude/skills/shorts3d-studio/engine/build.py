@@ -23,8 +23,11 @@ def load_character(key, cs, paths, brand):
     lib = paths["chars"]; os.makedirs(lib, exist_ok=True)
     f = os.path.join(lib, name + ".blend")
     preset = os.path.join(lib, name + ".json")
+    if not os.path.exists(f) and not os.path.exists(preset):
+        raise RuntimeError(f"character '{name}' is not in {lib}: run `s3d.py setup --actors` (rb_male/rb_female) "
+                           f"or `s3d.py add-character <file> --name {name}`")
     if not os.path.exists(f):
-        spec = json.load(open(preset)) if os.path.exists(preset) else {}
+        spec = json.load(open(preset))
         spec.update({k: cs[k] for k in ("macro", "outfit") if k in cs})
         coll, rig, body = mhchar.build_character(name, paths["mh_data"], paths["mh_assets"],
                                                  macro=spec.get("macro"), outfit=spec.get("outfit"), log=core.log)
@@ -301,8 +304,10 @@ def main():
         sc.frame_step = step
         mark = os.path.join(fdir, ".quality")
         old_q = open(mark).read().strip() if os.path.exists(mark) else None
-        resume = bool(opts.get("resume")) and old_q == quality
-        if old_q != quality:  # never mix qualities inside one video
+        cls = "final" if quality in ("final", "cycles") else "review"  # EEVEE final + Cycles hero shots may mix
+        old_q = {"cycles": "final"}.get(old_q, old_q)
+        resume = bool(opts.get("resume")) and old_q == cls
+        if old_q != cls:  # never mix review frames with final frames
             for fp in glob.glob(os.path.join(fdir, "*.*")):
                 os.remove(fp)
         elif not resume:
@@ -311,7 +316,7 @@ def main():
                     for ext in (".png", ".jpg"):
                         fp = os.path.join(fdir, f"{f:05d}{ext}")
                         if os.path.exists(fp): os.remove(fp)
-        open(mark, "w").write(quality)
+        open(mark, "w").write(cls)
         sc.render.use_overwrite = not resume; sc.render.use_placeholder = resume  # crash/sleep -> rerun with --resume
         total = sum((sh["f1"] - sh["f0"]) // step + 1 for sh in shots); done = [0]; t_r = time.time()
         prog = os.path.join(out, "progress.json")

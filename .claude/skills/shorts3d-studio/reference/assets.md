@@ -7,6 +7,8 @@ monetised channel. Always re-check the asset page; licences change.
 ## Characters (your recurring cast = your "trademark")
 | source | licence | how it plugs in |
 |---|---|---|
+| **Microsoft Rocketbox (default realistic cast)** - 115 scanned-quality avatars (adults, kids, professions) with full face rig (ARKit + visemes), 4K PBR textures | **MIT** (credit appreciated) | `s3d.py setup --actors` installs `rb_male` + `rb_female`; more: download any `Assets/Avatars/*/<Name>/Export/<Name>_facial.fbx` + `Textures/` from github.com/microsoft/Microsoft-Rocketbox -> `s3d.py add-character <Name>_facial.fbx --name <id>` |
+| Any rigged free human (Sketchfab CC-BY/CC0, Mixamo, VRoid/VRM, Daz, CC) | per asset (CC-BY: credit in description) | `s3d.py add-character file --name X` (skeleton + face mapped automatically) |
 | **MakeHuman data (built-in path)** — base mesh, rigs, ARKit face units, visemes, skins, hair, clothes | **CC0** | `s3d.py setup` downloads; `library/characters/*.json` presets → engine builds + caches the character. No add-on needed. |
 | MPFB2 Blender add-on (same data, GUI editor, hair editor) | add-on GPL, assets CC0 | design a character visually, export as .blend with **Mixamo rig + ARKit face units** → drop in `~/.shorts3d/library/characters/<name>.blend` |
 | Mixamo characters + animations | Adobe royalty-free (use in projects, no raw redistribution) | Mixamo bone names are supported natively (no face rig on Mixamo characters) |
@@ -31,7 +33,9 @@ Signature look: same character preset, same brand shirt (logo auto-printed), sam
 Z-Anatomy (CC BY-SA 4.0 — credit + share-alike), BodyParts3D (CC BY-SA), NIH 3D (licence per model, many CC0/CC-BY),
 Sketchfab CC-BY anatomy. Prefer CC0/CC-BY; otherwise build stylised organs from procedural parts.
 
-## Motion capture (optional, for complex body moves)
+## Motion capture (body language)
+**Rocketbox animations (MIT)**: 300+ clips (idles, talk/listen gestures, laugh, think, shrug, cheer, phone, drink,
+sit) - 20 curated ones download with `setup`, aliases in `library/clips/clips.json`; any other: `clip: {name: /path/x.fbx}`.
 Mixamo (royalty-free), CMU Graphics Lab mocap (free incl. commercial products; no resale of the data), Rokoko Vision /
 FreeMoCap / your phone video → mocap (you own your performance). Bandai-Namco dataset is **NC** → do not use.
 

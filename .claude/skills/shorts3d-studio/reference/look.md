@@ -22,7 +22,7 @@ skin against cool backgrounds, shallow depth of field in close-ups, wide-angle c
 | `preview` | EEVEE 50 % | full video draft with captions & audio | fast |
 | `final` | EEVEE 100 %, 64 spp, raytracing, motion blur | publish | ~1–4 s/frame on a modern GPU |
 | `cycles` | Cycles GPU, 96 spp adaptive + OIDN denoise | macro/glass/liquids/skin hero shots (`--shots`) | 10–60 s/frame |
-Mix: render most shots EEVEE `final`, hero macro shots `cycles --shots S03,S04` (same frame numbering → assemble picks
+Laptop GPU tiers, the preview -> final loop, ETA and `--resume`: see `reference/render.md`.
 up whatever is newest per shot).
 
 ## Make it look more real (cheap wins, in order)

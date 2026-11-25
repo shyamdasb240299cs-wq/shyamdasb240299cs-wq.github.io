@@ -11,7 +11,7 @@ scenes:
       plug:   {src: proc:plug, on: table, at: [0.1, 0.75], yaw: 0}
       outlet: {src: proc:outlet, params: {style: us}, at: [0.25, 2.14, 0.4], yaw: 180, free: true}
     cast:
-      hero: {char: hero, at: [0.1, 0.25], face: plug}
+      hero: {char: rb_male, at: [0.1, 0.25], face: plug}
     script:
       - hero.reach: {target: plug, hand: R, at: 0.1}
       - hero.grasp: {prop: plug}

@@ -1,7 +1,8 @@
 # Engine internals (read only when extending)
 
 ```
-bin/s3d.py          CLI: setup doctor new voice plan build assemble analyze assets brand
+bin/s3d.py          CLI: setup doctor init new status voice plan build assemble inspect finish gpu add-character analyze assets brand
+bin/s3d_inspect.py  every-frame check of preview/final.mp4 (pops vs neighbours, flicker, black, frozen)
 bin/s3d_tts.py      narration -> vo.wav + words.json (kokoro | edge | eleven | piper | file+whisper)
 bin/s3d_audio.py    captions.ass, mix (VO segments + SFX + auto-foley + ducked music, loudnorm), SFX synth, logo
 bin/s3d_analyze.py  reference video analysis (cuts, motion, colour, captions, transcript)
@@ -16,6 +17,9 @@ engine/sets.py      sets, world, light rigs, render quality, brand decals (shirt
 engine/camera.py    shot sizes, angles, moves, follow/lock, caption-safe composition, DOF, clip check
 engine/fx.py        xray, cutaway, arrows, labels, glow, glass, flow, lightning, exploded, crumbs, pop
 engine/qa.py        reach, finger penetration, body-vs-furniture, foot slide, floor, resting props, framing
+engine/assetchar.py any free rigged human (.fbx/.glb/.blend/.obj) -> normalised, skeleton fixed, PBR rebuilt, library
+engine/mocap.py     mocap clips -> skeleton-free JSON cache; layered by Performer.clip_at (torso deltas, arm dirs, fingers)
+engine/gpu.py       backend/device detection + EEVEE/Cycles benchmark (s3d.py gpu)
 ```
 
 ## Data flow
@@ -37,12 +41,14 @@ bottom-centre), add to `BUILDERS`. Materials via `P.mat(...)`. Use `P.curve_tube
 `engine/fx.py` function + a branch in `build.apply_fx`. Time-range with `_vis(ob, f0, f1, frames)` or keyed inputs.
 
 ## Bring your own character
-Any humanoid .blend with a Mixamo / UE / MPFB / Rigify-DEF / CC / Daz-named armature works: put it in
-`~/.shorts3d/library/characters/<name>.blend` with the armature and meshes inside a collection named `CHAR_<name>`.
-Face animation needs ARKit-named shape keys (optionally prefixed `!ex-`); clothes with `s3d_part = "clothes"`
-custom property get the brand decal.
+`s3d.py add-character file.fbx --name X [--textures dir]` (also .glb/.gltf/.blend/.obj). Bone names recognised:
+Mixamo, 3ds Max biped (Bip01/Bip001, Rocketbox), UE, CC/iClone, Daz, VRM, Rigify DEF, MPFB. Unknown names fail with
+the missing list -> add them to `rigkit.CANDS/LIMB/FPAT`. Face keys: ARKit 52 in any naming (`AK_NN_`, `!ex-`,
+`blendShape.`), visemes `AA_VI_NN_`/`viseme_`. No face keys = body acting only. Unrigged meshes are not supported:
+rig them first (Mixamo auto-rigger) or pick a rigged asset.
 
 ## Mocap
-Not automated yet: for a complex full-body move, import a Mixamo FBX onto a Mixamo-named rig in the scene `.blend`,
-mute the `s3d_ik` constraints for that time range, and keep engine verbs for the hands before/after.
-(Retargeting tip: apply each bone's armature-space rotation delta from rest — `core.rest_local_rot` does the math.)
+`clip` verb / `idle` cast option. Conversion: `P_clip @ R_ref^-1` per canonical bone in the character frame
+(`R_ref` = family bind pose, `library/clips/biped_rest.json` for Rocketbox; the clip's own rest otherwise), arm
+joint DIRECTIONS (rest-independent), pelvis offset / pelvis height. Feet stay procedural (planted) - full-body
+locomotion clips (dance, fall) are not supported; walk with `walk_to`.

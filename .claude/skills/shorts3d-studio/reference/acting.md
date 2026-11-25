@@ -54,6 +54,13 @@ intensity than film; `cu`/`ecu` shots can stay subtle.
 Narration is voice-over (genre default). For on-screen lines: `hero.talk: {text: "No way!", at: "w:way"}` — visemes
 are generated from the text; keep lines under 2 s.
 
-## Mocap (advanced, optional)
-For complex full-body moves (falling, dancing, sports) use a Mixamo/CMU clip on a Mixamo-named rig and keep IK verbs
-for the hands. See `reference/engine.md#mocap`.
+## Real human motion (mocap clips) - use it for body language
+Procedural verbs are exact (contacts); mocap is human (weight, rhythm, asymmetry). Combine them:
+- `idle: auto` (default) puts a real idle under the whole performance: never a frozen mannequin.
+- While the narration explains, give the actor a talking/thinking clip instead of stacking gestures:
+  `hero.clip: {name: talk, dur: 3.5, at: S02}` · reacting: `think`, `agree` (nods), `disagree`, `shrug`, `laugh`,
+  `scratch_head`, `present` (opens to the right side - put the explained object there), `cheer`, `clap`.
+- Hands that `reach`/`grasp`/`lift`/gesture ignore the clip automatically (contacts stay exact); the rest of the
+  body keeps the clip. Use `parts: [torso]` to keep only the body sway while both hands act.
+- One clip per shot; let it start ~0.3 s before the line (`at: "w:word"`, `delay: -0.3`); `amt: 0.6` = calmer.
+- Clip library: `library/clips/clips.json` (Rocketbox, MIT). Any FBX/BVH humanoid clip works: `name: /path/clip.fbx`.

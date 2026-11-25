@@ -10,7 +10,7 @@ scenes:
       gum: {src: proc:box, size_cm: 2, at: [0.25, -0.3, 1.1], free: true}
       stomach: {src: proc:droplet, params: {r: 0.06}, at: [0.0, 0.0, 1.05], free: true, color: "#E07A8B"}
     cast:
-      hero: {char: hero, at: [0, 0], face: 0}
+      hero: {char: rb_male, at: [0, 0], face: 0}
     script:
       - hero.face: {expr: happy, at: 0, dur: 2}
       - hero.chew: {cycles: 5, at: 0.2, expr: satisfied}

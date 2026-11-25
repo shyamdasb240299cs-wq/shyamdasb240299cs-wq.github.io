@@ -43,9 +43,11 @@ Set objects you can put things on: kitchen → `counter`; every set → `floor`.
 | `free: true` | skip the "resting" QA check (falling/flying props) |
 
 ### cast.<actor>
-`{char: hero|heroine|<preset>, at: [x, y], face: <prop|deg>, scale: 1.0, shirt: "#hex", macro: {...}, outfit: {...}}`
-Characters are built once from `~/.shorts3d/library/characters/<char>.json` and cached as `.blend`
-(delete the .blend to rebuild after editing the json). `scale: 0.08` = tiny-worker metaphor.
+`{char: rb_male|rb_female|hero|heroine|<added>, at: [x, y], face: <prop|deg>, scale: 1.0, idle: auto|none|<clip>, idle_amt: 0.7, shirt: "#hex"}`
+- `rb_male` / `rb_female`: realistic Rocketbox actors (`setup --actors`); any free rigged human: `s3d.py add-character f.fbx --name X`.
+- `hero`/`heroine`: MakeHuman presets built from `library/characters/<char>.json` (cached `.blend`; delete it to rebuild).
+- `idle: auto` layers real mocap idle (weight shifts, breathing) under everything when clips are installed.
+- `scale: 0.08` = tiny-worker metaphor.
 
 ### script verbs (actor)
 Common args: `at:` anchor · `delay: s` · `with: prev` (start together with the previous action) · `dur: s`.
@@ -67,7 +69,8 @@ Common args: `at:` anchor · `delay: s` · `with: prev` (start together with the
 | `wave` `thumbs_up` `facepalm` `shrug` `hands_on_hips` `cross_arms` | `hand`, `hold`, `expr` | ~1.5–2.5 s |
 | `nod` `shake_head` | `times` | 0.4 s each |
 | `lean` | `deg`, `dur` | 0.6 s |
-| `crouch` / `stand` | `depth: 0.35`, `dur` | 0.8 s |
+| `crouch` / `stand` | `depth: 0.35`, `dur` | 0.8 s (hips hinge back, torso leans: balanced) |
+| `clip` | `name: talk|think|agree|disagree|shrug|laugh|present|scratch_head|cheer|clap|wave|look_around|<file>`, `dur`, `amt: 1`, `fade: 0.4`, `speed`, `from`, `parts: [torso, arms, fingers, hips]` | clip length or `dur` (loops) |
 | `startle` | `hold` | 0.9 s jump-back + shocked face |
 | `face` | `expr`, `amt: 1.0`, `dur: 1.5`, `block: false` | overlays body actions (non-blocking) |
 | `talk` | `text`, `dur` | lip-sync for on-screen speech |

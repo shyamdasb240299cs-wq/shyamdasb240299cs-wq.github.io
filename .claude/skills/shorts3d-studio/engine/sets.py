@@ -161,8 +161,12 @@ def render(quality="preview", res=(1080, 1920), fps=30, engine=None, gpu=None):
         except TypeError:
             continue
     vs.exposure = -0.15
-    if eng == "BLENDER_WORKBENCH":
+    if eng == "BLENDER_WORKBENCH":  # motion-check look: textured, bright, neutral (no filmic darkening)
         sh = sc.display.shading; sh.light = "STUDIO"; sh.color_type = "TEXTURE"; sh.show_shadows = True
+        sh.shadow_intensity = 0.35; sh.show_cavity = False
+        vs.view_transform = "Standard"; vs.exposure = 0.35
+        try: vs.look = "None"
+        except TypeError: pass
         sc.display.render_aa = "FXAA"
     elif eng == "CYCLES":
         g = gpu or {}

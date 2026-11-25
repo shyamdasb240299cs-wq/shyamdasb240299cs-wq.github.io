@@ -19,7 +19,7 @@ scenes:
       bread: {src: proc:bread_slice, on: plate, yaw: 20}
       mug:   {src: proc:mug, on: table, at: [-0.32, 0.05], label: front}   # brand logo on the mug
     cast:
-      hero: {char: hero, at: [0.05, -0.64], face: table}   # already at the table: the hook needs hands at t=0
+      hero: {char: rb_male, at: [0.05, -0.64], face: table}   # already at the table: the hook needs hands at t=0
     script:                                  # performance on the video clock (sequential unless at:)
       - hero.reach:   {target: bread, hand: R, at: 0.1}
       - hero.grasp:   {prop: bread}
