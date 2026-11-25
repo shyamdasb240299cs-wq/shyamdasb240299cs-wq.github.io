@@ -273,6 +273,8 @@ def empty(name, loc=(0, 0, 0), coll=None, size=0.05, kind="PLAIN_AXES"):
 
 def hexcol(h, a=1.0):
     h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
     r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
     lin = lambda c: c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
     return (lin(r), lin(g), lin(b), a)

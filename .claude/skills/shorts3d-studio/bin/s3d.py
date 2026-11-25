@@ -56,7 +56,12 @@ def load_spec(path):
         import yaml
     except ImportError:
         sys.exit("pip install pyyaml   (or write the spec as .json)")
-    return yaml.safe_load(txt)
+
+    class L(yaml.SafeLoader):  # YAML 1.1 would turn `on:`/`yes:` into booleans; keep only true/false
+        pass
+    L.yaml_implicit_resolvers = {k: [r for r in v if r[0] != "tag:yaml.org,2002:bool"] for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()}
+    L.add_implicit_resolver("tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF"))
+    return yaml.load(txt, Loader=L)
 
 
 def vdir(slug):

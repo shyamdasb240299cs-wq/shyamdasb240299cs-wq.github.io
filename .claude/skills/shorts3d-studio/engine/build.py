@@ -146,10 +146,10 @@ def main():
     objs = dict(sets.SETS[st.get("preset", "studio")](coll, color=st.get("color", brand.get("bg", "#3EC6E0")), ground=st.get("ground", "grass")))
     wd = st.get("world", {})
     sets.world(wd.get("kind", "sky" if st.get("preset") == "outdoor" else "color"), wd.get("color", st.get("sky", "#BDEBF5")),
-               float(wd.get("strength", 0.55)), wd.get("hdri"))
+               float(wd.get("strength", 0.35)), wd.get("hdri"))
     logo = brand.get("logo")
     for name, ps in S.get("props", {}).items():
-        ob = P.make(name, ps["src"], coll, ps.get("size_cm"))
+        ob = P.make(name, ps["src"], coll, ps.get("size_cm"), ps.get("params"))
         if ps.get("surface"): ob["s3d_surface"] = True
         if ps.get("obstacle"): ob["s3d_obstacle"] = True
         if ps.get("free"): ob["s3d_free"] = True

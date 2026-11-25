@@ -300,11 +300,17 @@ def normalize_size(ob, size_cm=None):
     me.update()
 
 
-def make(name, src, coll, size_cm=None):
-    """src: proc:<kind> | poly:<id>[@2k] | file:<path> | lib:<name> (library dir)."""
+def make(name, src, coll, size_cm=None, params=None):
+    """src: proc:<kind> | poly:<id>[@2k] | file:<path> | lib:<name> (library dir). params -> procedural builders."""
     kind, _, arg = src.partition(":")
     if kind == "proc":
-        ob = PROCS[arg](name, coll)
+        if arg in PROCS:
+            ob = PROCS[arg](name, coll)
+        else:
+            from . import mech
+            if arg not in mech.BUILDERS:
+                raise RuntimeError(f"unknown proc prop '{arg}'. known: {sorted(PROCS) + sorted(mech.BUILDERS)}")
+            ob = mech.BUILDERS[arg](name, coll, **(params or {}))
     elif kind == "poly":
         aid, _, res = arg.partition("@")
         ob = import_file(polyhaven(aid, res or "1k"), name, coll)
@@ -315,7 +321,7 @@ def make(name, src, coll, size_cm=None):
         ob = import_file(cand[0], name, coll)
     else:
         ob = import_file(arg if kind == "file" else src, name, coll)
-    normalize_size(ob, size_cm if kind != "proc" else None)
+    normalize_size(ob, size_cm)
     ob["s3d_prop"] = True
     return ob
 

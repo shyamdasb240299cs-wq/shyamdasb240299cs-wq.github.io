@@ -6,15 +6,15 @@ from mathutils import Vector, Quaternion
 from . import core
 
 # size: subject height that fills the frame (m); lens mm; f-stop; default elevation (deg); aim part
-SIZES = {
-    "ecu":    dict(h=0.16, lens=85, f=2.0, el=0, part="face"),
-    "cu":     dict(h=0.34, lens=65, f=2.8, el=2, part="face"),
-    "mcu":    dict(h=0.62, lens=50, f=3.5, el=4, part="chest"),
-    "medium": dict(h=1.05, lens=35, f=5.0, el=6, part="waist"),
-    "wide":   dict(h=2.4, lens=26, f=8.0, el=10, part="body"),
-    "xwide":  dict(h=4.5, lens=24, f=11, el=14, part="body"),
-    "insert": dict(h=0.22, lens=60, f=2.4, el=25, part="object"),
-    "macro":  dict(h=0.09, lens=100, f=2.0, el=15, part="object"),
+SIZES = {  # ys = where the subject point sits on screen (0 bottom .. 1 top); captions live at ~0.2
+    "ecu":    dict(h=0.16, lens=85, f=2.0, el=0, part="face", ys=0.55),
+    "cu":     dict(h=0.36, lens=65, f=2.8, el=3, part="face", ys=0.6),
+    "mcu":    dict(h=0.62, lens=50, f=3.5, el=5, part="upper", ys=0.6),
+    "medium": dict(h=1.1, lens=35, f=5.0, el=7, part="chest", ys=0.6),
+    "wide":   dict(h=2.5, lens=26, f=8.0, el=10, part="body", ys=0.55),
+    "xwide":  dict(h=4.5, lens=24, f=11, el=14, part="body", ys=0.55),
+    "insert": dict(h=0.24, lens=55, f=2.8, el=38, part="object", ys=0.55),
+    "macro":  dict(h=0.1, lens=100, f=2.4, el=30, part="object", ys=0.55),
 }
 ANGLES = {"front": 0, "front_left": -35, "front_right": 35, "left": -90, "right": 90, "back_left": -145,
           "back_right": 145, "back": 180}
@@ -36,6 +36,8 @@ def _part_point(char, part, rig_eval=True):
         return M @ ph.matrix @ hd.matrix_local.inverted() @ char.mouth
     if part in ("hand_R", "hand_L"):
         return M @ pb[char.b[f"hand.{part[-1]}"]].head
+    if part == "upper":
+        return _part_point(char, "face").lerp(_part_point(char, "chest"), 0.35)
     if part == "chest":
         b = char.spine[-1] if char.spine else char.b["hips"]
         return M @ pb[b].tail
@@ -87,9 +89,10 @@ def solve_camera(name, spec, frames, chars, objs, fps):
     for i in range(len(pts)):
         a, b = max(0, i - k), min(len(pts), i + k + 1)
         sm.append(sum(pts[a:b], Vector()) / (b - a))
-    if spec.get("lock", False) or spec.get("move", "static") in ("static", "push_in", "pull_out", "dolly_zoom", "crane_up", "orbit"):
-        mid = sm[len(sm) // 2]
-        sm = [p.lerp(mid, 0.7) for p in sm]  # mostly locked-off framing, slight follow
+    span = max((p - sm[0]).length for p in sm) if sm else 0.0
+    if spec.get("lock", span < 0.12):  # subject barely moves -> rock-steady locked frame
+        mid = sum(sm, Vector()) / len(sm)
+        sm = [mid.copy() for _ in sm]
     # direction around the subject
     yaw0 = _yaw_of(char) if char else 0.0
     az = math.radians(spec.get("az", ANGLES.get(spec.get("angle", "front_left"), 0)))
@@ -138,9 +141,11 @@ def solve_camera(name, spec, frames, chars, objs, fps):
             else:
                 aim = loc + fw * 0.6 + Vector((0, 0, -0.45))
         else:
-            # frame: subject centre a bit above frame centre (captions sit low)
+            # place the subject at screen height ys (captions sit low in 9:16)
             loc = p + dirv * d + Vector((0, 0, up_off))
-            aim = p - Vector((0, 0, (0.5 - CAPTION_SAFE) * 0.55 * d * 2 * math.tan(vfov / 2) * 0.5))
+            fh = 2 * d * math.tan(vfov / 2)
+            fwdc = (p - loc).normalized(); upc = (Vector((0, 0, 1)) - fwdc * fwdc.z).normalized()
+            aim = p - upc * (float(spec.get("ys", size.get("ys", 0.58))) - 0.5) * fh
         if spec.get("handheld", move == "handheld"):
             hh = float(spec.get("shake", 1.0))
             loc = loc + Vector((noise.fbm(f * 0.04) * 0.012, noise.fbm(f * 0.04 + 50) * 0.008, noise.fbm(f * 0.04 + 90) * 0.01)) * hh * max(0.4, d)
@@ -149,7 +154,7 @@ def solve_camera(name, spec, frames, chars, objs, fps):
             q = q @ Quaternion((0, 0, 1), math.radians(spec["roll"]))
         kw.put(cam, "location", f, loc); kw.put(cam, "rotation_quaternion", f, q)
         kw.put(cam_data, "lens", f, L)
-        kw.put(cam_data, "dof.focus_distance", f, (aim - loc).length if spec.get("focus") is None else (p - loc).length)
+        kw.put(cam_data, "dof.focus_distance", f, (p - loc).length)
     kw.write()
     cam_data.dof.use_dof = spec.get("dof", True)
     cam_data.dof.aperture_fstop = float(spec.get("fstop", size["f"]))

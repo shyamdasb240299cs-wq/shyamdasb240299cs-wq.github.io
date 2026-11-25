@@ -73,7 +73,7 @@ SETS = {"studio": studio, "kitchen": kitchen, "room": room, "outdoor": outdoor, 
 
 
 # ------------------------------------------------------------------ world + lights
-def world(kind="color", color="#9FDCEB", strength=0.6, hdri=None):
+def world(kind="color", color="#9FDCEB", strength=0.35, hdri=None):
     sc = bpy.context.scene
     w = bpy.data.worlds.new("s3d_world"); sc.world = w
     w.use_nodes = True
@@ -119,8 +119,8 @@ def _area(name, loc, target, energy, size, color=(1, 1, 1), coll=None):
 
 
 RIGS = {  # (az deg rel. to subject facing, elevation deg, distance m, energy W, size m, colour)
-    "soft": [("key", -40, 35, 3.0, 650, 2.4, (1, .96, .92)), ("fill", 45, 15, 3.2, 230, 3.0, (.88, .93, 1)),
-             ("rim", 160, 40, 2.6, 520, 1.6, (1, 1, 1)), ("top", 0, 85, 3.5, 150, 3.0, (1, 1, 1))],
+    "soft": [("key", -42, 32, 2.8, 750, 1.3, (1, .95, .9)), ("fill", 50, 12, 3.2, 140, 3.0, (.85, .92, 1)),
+             ("rim", 155, 38, 2.4, 650, 1.0, (1, .98, .95)), ("top", 0, 85, 3.5, 90, 3.0, (1, 1, 1))],
     "drama": [("key", -55, 30, 2.6, 900, 1.2, (1, .93, .85)), ("fill", 60, 10, 3.5, 60, 3.0, (.8, .88, 1)),
               ("rim", 150, 35, 2.2, 900, 1.0, (.9, .97, 1))],
     "bright": [("key", -30, 30, 3.0, 800, 3.0, (1, .98, .95)), ("fill", 35, 20, 3.0, 450, 3.0, (.95, .97, 1)),
@@ -147,7 +147,7 @@ def render(quality="preview", res=(1080, 1920), fps=30, engine=None):
     sc = bpy.context.scene; r = sc.render
     r.fps = fps
     r.resolution_x, r.resolution_y = res
-    r.resolution_percentage = {"preview": 50, "draft": 35, "final": 100}.get(quality, 100)
+    r.resolution_percentage = {"preview": 50, "draft": 35, "blocking": 50, "final": 100}.get(quality, 100)
     eng = engine or ("CYCLES" if quality == "cycles" else core.eevee_id())
     if quality == "blocking":
         eng = "BLENDER_WORKBENCH"
@@ -156,8 +156,11 @@ def render(quality="preview", res=(1080, 1920), fps=30, engine=None):
     vs.view_transform = "AgX"
     looks = {i.identifier for i in vs.bl_rna.properties["look"].enum_items}
     for lk in ("AgX - Punchy", "Punchy", "AgX - Medium High Contrast", "Medium High Contrast"):
-        if lk in looks:
+        try:
             vs.look = lk; break
+        except TypeError:
+            continue
+    vs.exposure = -0.15
     if eng == "BLENDER_WORKBENCH":
         sh = sc.display.shading; sh.light = "STUDIO"; sh.color_type = "TEXTURE"; sh.show_shadows = True
         sc.display.render_aa = "FXAA"

@@ -1,0 +1,41 @@
+# "How X Works" (gadget / tech) — hands-on hook, glass-shell mechanism, tiny-detail macro, payoff, loop.
+title: "How Electrical Outlets Work 🤔"
+voice: {engine: kokoro, voice: am_michael, speed: 1.1}
+publish: {hashtags: ["#shorts", "#howitworks", "#electricity", "#science"]}
+
+scenes:
+  room:
+    set: {preset: room, light: soft}
+    props:
+      table:  {src: proc:table, at: [0, 0.9], surface: true}
+      plug:   {src: proc:plug, on: table, at: [0.1, 0.75], yaw: 0}
+      outlet: {src: proc:outlet, params: {style: us}, at: [0.25, 2.14, 0.4], yaw: 180, free: true}
+    cast:
+      hero: {char: hero, at: [0.1, 0.25], face: plug}
+    script:
+      - hero.reach: {target: plug, hand: R, at: 0.1}
+      - hero.grasp: {prop: plug}
+      - hero.lift:  {to: show}
+      - hero.face:  {expr: curious, at: S02, dur: 2}
+  inside:
+    set: {preset: studio, light: soft}
+    props:
+      wall_slot: {src: proc:box, at: [0, 0, 0], color: "#E9EEF2", size_cm: 20}
+      wire_hot:  {src: proc:wire, params: {points: [[-0.12, 0.02, 0.05], [0.0, 0.02, 0.09], [0.12, 0.02, 0.05]], color: "#D23B2E"}, at: [0, 0, 0.0], free: true}
+      wire_neu:  {src: proc:wire, params: {points: [[-0.12, -0.02, 0.05], [0.0, -0.02, 0.07], [0.12, -0.02, 0.05]], color: "#2E5BD2"}, at: [0, 0, 0.0], free: true}
+      coil:      {src: proc:coil, at: [0, 0, 0.0], free: true}
+    script:
+      - coil.pop: {at: S04}
+    fx:
+      - {type: flow, path: [[-0.12, 0.02, 0.06], [0.0, 0.02, 0.1], [0.12, 0.02, 0.06]], color: "#FFD43B", from: S03, to: S05.end}
+      - {type: lightning, from: [-0.02, 0.0, 0.12], to: [0.02, 0.0, 0.16], color: "#9FE8FF", from: S05, to: S05.end}
+
+shots:
+  - {id: S01, scene: room, say: "Every time you plug something in, you're grabbing a river of electrons.",
+     cam: {size: insert, target: plug, angle: right, move: push_in}, sfx: [{name: whoosh, at: 0}]}
+  - {id: S02, scene: room, say: "But they don't actually flow into your phone.", cam: {size: cu, target: hero.face, angle: front_left}}
+  - {id: S03, scene: inside, say: "Inside the wall, two wires carry *alternating* current,", cam: {size: macro, target: wall_slot, move: orbit, el: 35}}
+  - {id: S04, scene: inside, say: "pushing the electrons back and forth sixty times a second.", cam: {size: insert, target: coil, angle: front, move: push_in}}
+  - {id: S05, scene: inside, say: "They barely move. It's the *push* that travels, at nearly the speed of light,",
+     cam: {size: macro, target: coil, angle: front_right}, sfx: [{name: zap, at: "w:push"}]}
+  - {id: S06, scene: room, say: "which is why your phone charges the instant you plug it in.", cam: {size: mcu, target: hero.face, angle: front_right}}

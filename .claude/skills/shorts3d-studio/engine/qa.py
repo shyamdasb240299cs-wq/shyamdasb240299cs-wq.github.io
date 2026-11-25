@@ -50,14 +50,14 @@ def run(performers, props, shots, frames, step=3):
                 last_foot[key] = Vector((fp.x, fp.y))
                 # fingers inside a held prop
                 for prop, fr in held.items():
-                    if f in fr and prop in props and perf.holding_at(prop, f):
+                    if f in fr and prop in props and perf.holding_at(prop, f) == s:
                         if prop not in pbvh or pbvh[prop][0] != f:
                             pbvh[prop] = (f, core.bvh_world(props[prop], evaluated=False))
                         tree = pbvh[prop][1]
                         for fname, pts in ch.fingertip_points(s).items():
                             for p in pts[3:]:
                                 loc, nrm, _, dist = tree.find_nearest(p)
-                                if loc is not None and (p - loc).dot(nrm) < 0 and dist > 0.004:
+                                if loc is not None and (p - loc).dot(nrm) < 0 and 0.004 < dist < 0.03:
                                     bad["finger"].append((f, perf, s, dist, prop)); break
             # body vs furniture (wrists/elbows/knees/hips are the usual offenders)
             for o in furniture:

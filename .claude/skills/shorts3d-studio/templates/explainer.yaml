@@ -19,19 +19,19 @@ scenes:
       bread: {src: proc:bread_slice, on: plate, yaw: 20}
       mug:   {src: proc:mug, on: table, at: [-0.32, 0.05], label: front}   # brand logo on the mug
     cast:
-      hero: {char: hero, at: [-1.3, -1.6], face: table}
+      hero: {char: hero, at: [0.05, -0.64], face: table}   # already at the table: the hook needs hands at t=0
     script:                                  # performance on the video clock (sequential unless at:)
-      - hero.walk_to: {target: bread, stop: reach}
-      - hero.reach:   {target: bread, hand: R}
+      - hero.reach:   {target: bread, hand: R, at: 0.1}
       - hero.grasp:   {prop: bread}
-      - hero.lift:    {to: show}             # looks at it
-      - hero.face:    {expr: skeptical, dur: 1.6}
+      - hero.lift:    {to: show}             # brings it up to look at it
+      - hero.face:    {expr: skeptical, at: S02, dur: 2.2}
       - hero.lift:    {to: mouth, at: S05}
       - hero.bite:    {}
       - hero.chew:    {cycles: 4, expr: yum}
       - hero.swallow: {}
+      - hero.face:    {expr: smirk, at: S07, dur: 2.0}
   macro:
-    set: {preset: void, world: {color: "#0B1B2B", strength: 0.2}, light: xray}
+    set: {preset: void, world: {color: "#0B1B2B", strength: 0.25}, light: drama}
     props:
       crumb: {src: proc:bread_slice, at: [0, 0, 0.0], yaw: 0}
     fx:
@@ -41,7 +41,7 @@ shots:
   - id: S01                                  # HOOK: hands + object, mid-action, frame 0
     scene: kitchen
     say: "If you leave bread out overnight, it turns hard as a rock."
-    cam: {size: insert, target: bread, angle: front_right, move: push_in}
+    cam: {size: insert, target: bread, angle: right, move: push_in}
     sfx: [{name: whoosh, at: 0}]
   - id: S02
     scene: kitchen

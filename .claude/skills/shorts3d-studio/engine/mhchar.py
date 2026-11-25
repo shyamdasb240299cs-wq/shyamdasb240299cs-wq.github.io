@@ -161,24 +161,60 @@ def _set(node, name, val):
         node.inputs[name].default_value = val
 
 
+CLEAN = {  # third-party prints on CC0 clothes textures: (u0, v0, u1, v1) regions where coloured/dark marks are erased
+    "male_casualsuit06": [(0.0, 0.5, 1.0, 1.0)],
+}
+
+
+def clean_texture(path, regions, out_dir):
+    """Erase printed logos inside UV regions: saturated or dark pixels -> local fabric colour (keeps shading)."""
+    img = bpy.data.images.load(path, check_existing=False)
+    w, h = img.size
+    px = np.empty(w * h * 4, dtype=np.float32); img.pixels.foreach_get(px); px = px.reshape(h, w, 4)
+    for u0, v0, u1, v1 in regions:
+        y0, y1, x0, x1 = int(v0 * h), int(v1 * h), int(u0 * w), int(u1 * w)
+        reg = px[y0:y1, x0:x1, :3]
+        mx, mn = reg.max(-1), reg.min(-1)
+        sat = (mx - mn) / np.maximum(mx, 1e-4)
+        bad = (sat > 0.1) | (mx < 0.78)
+        good = reg[~bad]
+        fill = np.median(good, axis=0) if len(good) else np.array([0.9, 0.9, 0.9])
+        reg[bad] = fill
+        px[y0:y1, x0:x1, :3] = reg
+    img.pixels.foreach_set(px.ravel())
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, "clean_" + os.path.basename(path))
+    img.filepath_raw = out; img.file_format = "PNG"; img.save()
+    bpy.data.images.remove(img)
+    return out
+
+
 def make_material(name, kind, mat):
     """kind: skin|eye|teeth|tongue|hair|brow|cloth"""
     M = bpy.data.materials.new(name)
     M.use_nodes = True
     nt = M.node_tree; n = nt.nodes; L = nt.links
     bsdf = n.get("Principled BSDF")
-    tex = _img(_tex_path(mat, "diffuseTexture"))
+    tp = _tex_path(mat, "diffuseTexture")
+    for key, regions in CLEAN.items():
+        if tp and key in tp and kind == "cloth":
+            tp = clean_texture(tp, regions, os.path.join(os.path.expanduser(os.environ.get("S3D_HOME", "~/.shorts3d")), "cache", "textures"))
+    tex = _img(tp)
     uvn = None
     if tex:
         t = n.new("ShaderNodeTexImage"); t.image = tex; t.location = (-500, 250)
         if kind == "skin":
             hs = n.new("ShaderNodeHueSaturation"); hs.location = (-250, 250)
-            hs.inputs["Saturation"].default_value = 1.08; hs.inputs["Value"].default_value = 1.0
+            hs.inputs["Saturation"].default_value = 1.18; hs.inputs["Value"].default_value = 0.9
             L.new(t.outputs["Color"], hs.inputs["Color"]); L.new(hs.outputs["Color"], bsdf.inputs["Base Color"])
         else:
             L.new(t.outputs["Color"], bsdf.inputs["Base Color"])
         if kind in ("hair", "brow") or mat.get("transparent", "False") == "True":
-            L.new(t.outputs["Alpha"], bsdf.inputs["Alpha"])
+            if kind == "hair":  # crisp alpha-clipped cards: no sorting artefacts, no dither noise
+                gt = n.new("ShaderNodeMath"); gt.operation = "GREATER_THAN"; gt.inputs[1].default_value = 0.4
+                L.new(t.outputs["Alpha"], gt.inputs[0]); L.new(gt.outputs[0], bsdf.inputs["Alpha"])
+            else:
+                L.new(t.outputs["Alpha"], bsdf.inputs["Alpha"])
             if hasattr(M, "surface_render_method"):
                 M.surface_render_method = "DITHERED"
             elif hasattr(M, "blend_method"):
