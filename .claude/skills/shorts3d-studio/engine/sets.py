@@ -287,7 +287,20 @@ def shirt_decal(clothes_obs, image_path, chest_world, fwd_world, up_world=(0, 0,
             L.new(src, mix.inputs["A"])
         else:
             mix.inputs["A"].default_value = bsdf.inputs["Base Color"].default_value
-        L.new(tex.outputs["Color"], mix.inputs["B"]); L.new(tex.outputs["Alpha"], mix.inputs["Factor"])
+        # only near the chest: texture atlases put other islands (neck, back) next to the shirt in UV space.
+        # 'Generated' coords come from the rest mesh, so the mask sticks to the body while it moves.
+        me = ob.data; ts_loc, ts_size = Vector(me.texspace_location), Vector(me.texspace_size)
+        c_gen = Vector(((hit[i] - (ts_loc[i] - ts_size[i])) / max(1e-9, 2 * ts_size[i]) for i in range(3)))
+        tcn = n.new("ShaderNodeTexCoord")
+        dv = n.new("ShaderNodeVectorMath"); dv.operation = "SUBTRACT"; dv.inputs[1].default_value = c_gen
+        mm = n.new("ShaderNodeVectorMath"); mm.operation = "MULTIPLY"; mm.inputs[1].default_value = ts_size * 2
+        ln = n.new("ShaderNodeVectorMath"); ln.operation = "LENGTH"
+        fall = n.new("ShaderNodeMapRange"); fall.inputs["From Min"].default_value = size * 0.8
+        fall.inputs["From Max"].default_value = size * 1.4; fall.inputs["To Min"].default_value = 1.0; fall.inputs["To Max"].default_value = 0.0
+        am = n.new("ShaderNodeMath"); am.operation = "MULTIPLY"
+        L.new(tcn.outputs["Generated"], dv.inputs[0]); L.new(dv.outputs[0], mm.inputs[0]); L.new(mm.outputs[0], ln.inputs[0])
+        L.new(ln.outputs["Value"], fall.inputs["Value"]); L.new(tex.outputs["Alpha"], am.inputs[0]); L.new(fall.outputs["Result"], am.inputs[1])
+        L.new(tex.outputs["Color"], mix.inputs["B"]); L.new(am.outputs[0], mix.inputs["Factor"])
         L.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
     core.log(f"brand: logo printed on {ob.name}")
     return ob

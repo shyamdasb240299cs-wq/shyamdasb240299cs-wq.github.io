@@ -31,6 +31,7 @@ still decide in `shots.yaml`. Check here before writing new bpy code - most "new
 | Blank grey mechanism shot | parts hidden inside an opaque prop | - | build mechanism scenes in the open, or `glass`/`xray` the shell |
 | Boolean cutaway artefacts | mesh booleans on skinned/complex meshes | shader cutaway (clip plane in the material) | `fx: cutaway` |
 | Third-party logo on a downloaded texture | asset baked a brand | `clean_texture` + own brand decals | parody/no real brands |
+| Brand logo stamped twice (chest + neck) on a scanned actor | texture atlas: neck island sits next to the shirt in UV space | decal masked by distance from the chest on the rest mesh ('Generated' coords) | `brand.shirt_logo_size` to resize |
 | Prop floating or sunk | raw z coordinates | `on: <surface>` raycast placement, QA +-4 mm | always `on:` |
 
 ## Pipeline
