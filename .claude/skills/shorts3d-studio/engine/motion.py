@@ -20,6 +20,9 @@ def Rz(a):
     return Quaternion((0, 0, 1), a)
 
 
+NOGAIN = ("jaw", "eyeBlink", "eyeLook", "v:", "mouthClose", "tongue")
+
+
 class Performer:
     def __init__(self, ch, start, yaw, fps, seed=1, scene_props=None):
         self.ch, self.fps = ch, fps
@@ -784,6 +787,7 @@ class Performer:
         nsp = max(1, len(ch.spine))
         self.face.auto_blinks(frames[0] / self.fps, frames[-1] / self.fps)
         face_keys = set()
+        gain = getattr(ch, "face_gain", 1.0)
         samples = []
         for f in frames:
             t = f / self.fps
@@ -832,6 +836,8 @@ class Performer:
             kw.put(ch.ctrl["gaze"], "location", f, gz)
             for k in face_keys:
                 v = fs.get(k, 0.0)
+                if gain != 1.0 and not k.startswith(NOGAIN):
+                    v = min(1.0, v * gain)
                 for (skd, kname) in ch.face.get(k, []):
                     kw.put(skd, f'key_blocks["{kname}"].value', f, v)
         self._bake_fingers(kw, frames)

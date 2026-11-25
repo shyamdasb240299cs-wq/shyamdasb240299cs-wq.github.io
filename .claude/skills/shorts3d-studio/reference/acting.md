@@ -23,8 +23,8 @@ bite marks, chewing with closed lips. **Your job is the choices and the timing.*
 **React to a fact**: `face` + one gesture: surprised → `startle`; gross → `face: disgust` + `lean: {deg: -8}`;
 confused → `shrug`; smug → `cross_arms` + `smirk`; pain → `wince` + `crouch: {depth: 0.15}`.
 **Explain/point**: `point: {target: X, hold: 1.2}` + `look_at` the camera-side target.
-**Two actors / handover**: actor A `reach`+`grasp`, `lift: {to: [x,y,z]}` toward B, B `reach` the same prop with
-`at:` slightly later, then A `release` (prop stays attached to B after B's grasp).
+**Two actors**: each actor has its own script; they can look at / point at / react to each other. One prop should be
+held by only one actor per scene (hand-overs between actors are not supported yet — cut between two scenes instead).
 
 ## Timing rules (feel human)
 - Anticipation: the engine moves eyes first; add `delay: 0.2` before big actions after a cut.

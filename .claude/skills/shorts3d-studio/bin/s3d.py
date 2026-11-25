@@ -11,6 +11,7 @@
   s3d.py analyze <video>            frame-by-frame breakdown of a reference video
   s3d.py assets <query>             search CC0 Poly Haven models/HDRIs
   s3d.py brand --name N --color #hex [--logo file.png]
+  s3d.py add-character <file> --name X [--textures dir]   free rigged human -> library (skeleton+face mapped)
 """
 import argparse, json, os, re, sys, subprocess, shutil, glob, math, time, zipfile, urllib.request
 
@@ -180,7 +181,7 @@ def cmd_doctor(a):
     rows = [("blender", ver), ("ffmpeg", "ok" if shutil.which("ffmpeg") else "missing"),
             ("human data", "ok" if os.path.exists(os.path.join(c["mh_data"], "3dobjs", "base.obj")) else "missing -> s3d.py setup"),
             ("face units", "ok" if os.path.isdir(os.path.join(c["mh_assets"], "targets", "faceunits")) else "missing -> s3d.py setup"),
-            ("characters", ", ".join(sorted(os.path.basename(p)[:-5] for p in glob.glob(os.path.join(c["chars"], "*.json")))) or "none"),
+            ("characters", ", ".join(sorted({os.path.splitext(os.path.basename(p))[0] for p in glob.glob(os.path.join(c["chars"], "*.json")) + glob.glob(os.path.join(c["chars"], "*.blend"))})) or "none"),
             ("brand", brand(c)["name"] + " " + brand(c)["color"])]
     tp = c["tts"].get("python", sys.executable)
     for mod in ("kokoro", "edge_tts", "faster_whisper"):
@@ -204,6 +205,21 @@ def cmd_new(a):
     if not os.path.exists(dst):
         shutil.copy(src, dst)
     print(f"[s3d] {dst} created from {a.template} template")
+
+
+def cmd_add_character(a):
+    """Free realistic character (.fbx/.glb/.gltf/.blend/.obj, rigged) -> engine-ready library character."""
+    c = cfg(); bl = find_blender(c)
+    if not bl: sys.exit("Blender not found")
+    log = os.path.join(HOME, "logs", f"add_{a.name}.log")
+    cmd = [bl, "-b", "--factory-startup", "-P", os.path.join(SKILL, "engine", "assetchar.py"), "--",
+           os.path.abspath(a.file), a.name, c["chars"]] + ([os.path.abspath(a.textures)] if a.textures else [])
+    run(cmd, log=_mk(log))
+    txt = open(log, errors="ignore").read()
+    print("\n".join(l for l in txt.splitlines() if l.startswith("[s3d]")))
+    if "saved character" not in txt:
+        sys.exit(f"[s3d] add-character failed (log {log})")
+    print(f"  use it in shots.yaml:  cast: {{hero: {{char: {a.name}, at: [x, y], face: <target>}}}}")
 
 
 def cmd_brand(a):
@@ -503,11 +519,13 @@ def main():
     p.add_argument("--shots"); p.add_argument("--scene"); p.add_argument("--jobs", type=int, default=1); p.add_argument("--step", type=int)
     p.add_argument("--fast", action="store_true", help="sheet stills in solid shading (seconds; checks motion/contacts/framing)")
     p = sp.add_parser("analyze"); p.add_argument("video"); p.add_argument("--out")
+    p = sp.add_parser("add-character"); p.add_argument("file"); p.add_argument("--name", required=True); p.add_argument("--textures")
     p = sp.add_parser("assets"); p.add_argument("query"); p.add_argument("--hdri", action="store_true"); p.add_argument("-n", type=int, default=12)
     p = sp.add_parser("brand"); p.add_argument("--name"); p.add_argument("--color"); p.add_argument("--accent"); p.add_argument("--logo"); p.add_argument("--font")
     a = ap.parse_args()
     {"setup": cmd_setup, "doctor": cmd_doctor, "new": cmd_new, "voice": cmd_voice, "plan": cmd_plan, "build": cmd_build,
-     "assemble": cmd_assemble, "analyze": cmd_analyze, "assets": cmd_assets, "brand": cmd_brand}[a.cmd](a)
+     "assemble": cmd_assemble, "analyze": cmd_analyze, "assets": cmd_assets, "brand": cmd_brand,
+     "add-character": cmd_add_character}[a.cmd](a)
 
 
 if __name__ == "__main__":

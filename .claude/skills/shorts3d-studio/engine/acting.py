@@ -26,7 +26,7 @@ EXPR = {
     "happy": sym(mouthSmile=.65, cheekSquint=.35, eyeSquint=.2, browInnerUp=.1),
     "big_smile": sym(mouthSmile=.9, jawOpen=.12, mouthUpperUp=.25, cheekSquint=.55, eyeSquint=.4, mouthDimple=.2),
     "delighted": sym(mouthSmile=.45, eyeSquint=.45, cheekSquint=.45, browInnerUp=.25, mouthPress=.1),
-    "yum": sym(mouthSmile=.35, mouthPress=.35, eyeBlink=.55, browInnerUp=.35, cheekSquint=.3),
+    "yum": sym(mouthSmile=.35, mouthPress=.35, eyeBlink=.38, browInnerUp=.35, cheekSquint=.3),
     "surprised": sym(browInnerUp=.8, browOuterUp=.75, eyeWide=.7, jawOpen=.3, mouthFunnel=.15),
     "shocked": sym(browInnerUp=1, browOuterUp=.9, eyeWide=1, jawOpen=.55, mouthStretch=.35, mouthFunnel=.1),
     "scared": sym(browInnerUp=.95, browOuterUp=.3, eyeWide=.85, mouthStretch=.6, jawOpen=.18, mouthFrown=.2),

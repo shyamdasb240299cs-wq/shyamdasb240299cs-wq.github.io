@@ -5,28 +5,28 @@ from . import core
 
 SIDES = {"L": ("Left", "l", "L", "_l", ".L", "_L_", "l"), "R": ("Right", "r", "R", "_r", ".R", "_R_", "r")}
 CANDS = {
-    "hips": ["mixamorig:Hips", "Hips", "pelvis", "hips", "CC_Base_Hip", "hip", "DEF-spine", "root"],
-    "head": ["mixamorig:Head", "Head", "head", "CC_Base_Head", "DEF-spine.006"],
-    "neck": ["mixamorig:Neck", "Neck", "neck_01", "neck01", "CC_Base_NeckTwist01", "neckLower", "DEF-spine.004"],
+    "hips": ["mixamorig:Hips", "Hips", "Bip01 Pelvis", "Bip001 Pelvis", "pelvis", "hips", "CC_Base_Hip", "hip", "J_Bip_C_Hips", "DEF-spine", "root"],
+    "head": ["mixamorig:Head", "Head", "Bip01 Head", "Bip001 Head", "head", "CC_Base_Head", "J_Bip_C_Head", "DEF-spine.006"],
+    "neck": ["mixamorig:Neck", "Neck", "Bip01 Neck", "Bip001 Neck", "neck_01", "neck01", "CC_Base_NeckTwist01", "J_Bip_C_Neck", "neckLower", "DEF-spine.004"],
 }
 LIMB = {  # canonical -> patterns ({S}=Left/Right, {s}=l/r, {X}=L/R)
-    "shoulder": ["mixamorig:{S}Shoulder", "{S}Shoulder", "clavicle_{s}", "clavicle.{X}", "CC_Base_{X}_Clavicle", "{s}Collar", "DEF-shoulder.{X}"],
-    "upperarm": ["mixamorig:{S}Arm", "{S}Arm", "upperarm_{s}", "upperarm01.{X}", "CC_Base_{X}_Upperarm", "{s}ShldrBend", "DEF-upper_arm.{X}"],
-    "forearm": ["mixamorig:{S}ForeArm", "{S}ForeArm", "lowerarm_{s}", "lowerarm01.{X}", "CC_Base_{X}_Forearm", "{s}ForearmBend", "DEF-forearm.{X}"],
-    "hand": ["mixamorig:{S}Hand", "{S}Hand", "hand_{s}", "wrist.{X}", "CC_Base_{X}_Hand", "{s}Hand", "DEF-hand.{X}"],
-    "thigh": ["mixamorig:{S}UpLeg", "{S}UpLeg", "thigh_{s}", "upperleg01.{X}", "CC_Base_{X}_Thigh", "{s}ThighBend", "DEF-thigh.{X}"],
-    "shin": ["mixamorig:{S}Leg", "{S}Leg", "calf_{s}", "lowerleg01.{X}", "CC_Base_{X}_Calf", "{s}Shin", "DEF-shin.{X}"],
-    "foot": ["mixamorig:{S}Foot", "{S}Foot", "foot_{s}", "foot.{X}", "CC_Base_{X}_Foot", "{s}Foot", "DEF-foot.{X}"],
-    "toe": ["mixamorig:{S}ToeBase", "{S}ToeBase", "ball_{s}", "toe1-1.{X}", "CC_Base_{X}_ToeBase", "{s}Toe", "DEF-toe.{X}"],
-    "eye": ["eye.{X}", "mixamorig:{S}Eye", "{S}Eye", "eye_{s}", "CC_Base_{X}_Eye", "{s}Eye"],
+    "shoulder": ["mixamorig:{S}Shoulder", "{S}Shoulder", "Bip01 {X} Clavicle", "Bip001 {X} Clavicle", "J_Bip_{X}_Shoulder", "clavicle_{s}", "clavicle.{X}", "CC_Base_{X}_Clavicle", "{s}Collar", "DEF-shoulder.{X}"],
+    "upperarm": ["mixamorig:{S}Arm", "{S}Arm", "Bip01 {X} UpperArm", "Bip001 {X} UpperArm", "J_Bip_{X}_UpperArm", "upperarm_{s}", "upperarm01.{X}", "CC_Base_{X}_Upperarm", "{s}ShldrBend", "DEF-upper_arm.{X}"],
+    "forearm": ["mixamorig:{S}ForeArm", "{S}ForeArm", "Bip01 {X} Forearm", "Bip001 {X} Forearm", "J_Bip_{X}_LowerArm", "lowerarm_{s}", "lowerarm01.{X}", "CC_Base_{X}_Forearm", "{s}ForearmBend", "DEF-forearm.{X}"],
+    "hand": ["mixamorig:{S}Hand", "{S}Hand", "Bip01 {X} Hand", "Bip001 {X} Hand", "J_Bip_{X}_Hand", "hand_{s}", "wrist.{X}", "CC_Base_{X}_Hand", "{s}Hand", "DEF-hand.{X}"],
+    "thigh": ["mixamorig:{S}UpLeg", "{S}UpLeg", "Bip01 {X} Thigh", "Bip001 {X} Thigh", "J_Bip_{X}_UpperLeg", "thigh_{s}", "upperleg01.{X}", "CC_Base_{X}_Thigh", "{s}ThighBend", "DEF-thigh.{X}"],
+    "shin": ["mixamorig:{S}Leg", "{S}Leg", "Bip01 {X} Calf", "Bip001 {X} Calf", "J_Bip_{X}_LowerLeg", "calf_{s}", "lowerleg01.{X}", "CC_Base_{X}_Calf", "{s}Shin", "DEF-shin.{X}"],
+    "foot": ["mixamorig:{S}Foot", "{S}Foot", "Bip01 {X} Foot", "Bip001 {X} Foot", "J_Bip_{X}_Foot", "foot_{s}", "foot.{X}", "CC_Base_{X}_Foot", "{s}Foot", "DEF-foot.{X}"],
+    "toe": ["mixamorig:{S}ToeBase", "{S}ToeBase", "Bip01 {X} Toe0", "Bip001 {X} Toe0", "J_Bip_{X}_ToeBase", "ball_{s}", "toe1-1.{X}", "CC_Base_{X}_ToeBase", "{s}Toe", "DEF-toe.{X}"],
+    "eye": ["eye.{X}", "Bip01 {X}Eye", "Bip001 {X}Eye", "mixamorig:{S}Eye", "{S}Eye", "eye_{s}", "CC_Base_{X}_Eye", "J_Adj_{X}_FaceEye", "{s}Eye"],
 }
 FINGERS = ["thumb", "index", "middle", "ring", "pinky"]
 FPAT = {  # finger f (name variants), segment n
-    "thumb": ["mixamorig:{S}HandThumb{n}", "{S}HandThumb{n}", "thumb_0{n}_{s}", "finger1-{n}.{X}", "CC_Base_{X}_Thumb{n}", "{s}Thumb{n}", "DEF-thumb.0{n}.{X}"],
-    "index": ["mixamorig:{S}HandIndex{n}", "{S}HandIndex{n}", "index_0{n}_{s}", "finger2-{n}.{X}", "CC_Base_{X}_Index{n}", "{s}Index{n}", "DEF-f_index.0{n}.{X}"],
-    "middle": ["mixamorig:{S}HandMiddle{n}", "{S}HandMiddle{n}", "middle_0{n}_{s}", "finger3-{n}.{X}", "CC_Base_{X}_Mid{n}", "{s}Mid{n}", "DEF-f_middle.0{n}.{X}"],
-    "ring": ["mixamorig:{S}HandRing{n}", "{S}HandRing{n}", "ring_0{n}_{s}", "finger4-{n}.{X}", "CC_Base_{X}_Ring{n}", "{s}Ring{n}", "DEF-f_ring.0{n}.{X}"],
-    "pinky": ["mixamorig:{S}HandPinky{n}", "{S}HandPinky{n}", "pinky_0{n}_{s}", "finger5-{n}.{X}", "CC_Base_{X}_Pinky{n}", "{s}Pinky{n}", "DEF-f_pinky.0{n}.{X}"],
+    "thumb": ["mixamorig:{S}HandThumb{n}", "{S}HandThumb{n}", "Bip01 {X} Finger0{z}", "Bip001 {X} Finger0{z}", "thumb_0{n}_{s}", "finger1-{n}.{X}", "CC_Base_{X}_Thumb{n}", "{s}Thumb{n}", "DEF-thumb.0{n}.{X}"],
+    "index": ["mixamorig:{S}HandIndex{n}", "{S}HandIndex{n}", "Bip01 {X} Finger1{z}", "Bip001 {X} Finger1{z}", "index_0{n}_{s}", "finger2-{n}.{X}", "CC_Base_{X}_Index{n}", "{s}Index{n}", "DEF-f_index.0{n}.{X}"],
+    "middle": ["mixamorig:{S}HandMiddle{n}", "{S}HandMiddle{n}", "Bip01 {X} Finger2{z}", "Bip001 {X} Finger2{z}", "middle_0{n}_{s}", "finger3-{n}.{X}", "CC_Base_{X}_Mid{n}", "{s}Mid{n}", "DEF-f_middle.0{n}.{X}"],
+    "ring": ["mixamorig:{S}HandRing{n}", "{S}HandRing{n}", "Bip01 {X} Finger3{z}", "Bip001 {X} Finger3{z}", "ring_0{n}_{s}", "finger4-{n}.{X}", "CC_Base_{X}_Ring{n}", "{s}Ring{n}", "DEF-f_ring.0{n}.{X}"],
+    "pinky": ["mixamorig:{S}HandPinky{n}", "{S}HandPinky{n}", "Bip01 {X} Finger4{z}", "Bip001 {X} Finger4{z}", "pinky_0{n}_{s}", "finger5-{n}.{X}", "CC_Base_{X}_Pinky{n}", "{s}Pinky{n}", "DEF-f_pinky.0{n}.{X}"],
 }
 ARKIT = ["browDownLeft", "browDownRight", "browInnerUp", "browOuterUpLeft", "browOuterUpRight", "cheekPuff",
          "cheekSquintLeft", "cheekSquintRight", "eyeBlinkLeft", "eyeBlinkRight", "eyeLookDownLeft", "eyeLookDownRight",
@@ -42,7 +42,28 @@ VISEMES = ["sil", "PP", "FF", "TH", "DD", "kk", "CH", "SS", "nn", "RR", "aa", "E
 
 def _fmt(p, side, n=""):
     S, s, X = ("Left", "l", "L") if side == "L" else ("Right", "r", "R")
-    return p.format(S=S, s=s, X=X, n=n)
+    z = "" if n in ("", 1) else str(int(n) - 1)  # biped: Finger1, Finger11, Finger12
+    return p.format(S=S, s=s, X=X, n=n, z=z)
+
+
+def map_bones(bones, rig_name="rig"):
+    """canonical name -> bone name for any humanoid naming; plus the spine chain (hips .. neck)."""
+    b = {}
+    for k, c in CANDS.items():
+        b[k] = next((n for n in c if n in bones), None)
+    for side in "LR":
+        for k, pats in LIMB.items():
+            b[f"{k}.{side}"] = next((_fmt(p, side) for p in pats if _fmt(p, side) in bones), None)
+        for f in FINGERS:
+            for n in (1, 2, 3):
+                b[f"{f}{n}.{side}"] = next((_fmt(p, side, n) for p in FPAT[f] if _fmt(p, side, n) in bones), None)
+    missing = [k for k in ("hips", "head", "upperarm.L", "forearm.L", "hand.L", "thigh.L", "shin.L", "foot.L") if not b.get(k)]
+    if missing:
+        raise RuntimeError(f"rig {rig_name}: cannot map bones {missing} - add the names to rigkit.CANDS/LIMB")
+    chain, cur = [], bones[b["neck"] or b["head"]].parent
+    while cur and cur.name != b["hips"]:
+        chain.append(cur.name); cur = cur.parent
+    return b, list(reversed(chain))
 
 
 def _basis(local_a, world_a, local_b, world_b):
@@ -63,47 +84,38 @@ class Character:
     def __init__(self, name, rig, coll=None):
         self.name, self.rig = name, rig
         self.coll = coll
-        bones = rig.data.bones
-        self.b = {}
-        for k, c in CANDS.items():
-            self.b[k] = next((n for n in c if n in bones), None)
-        for side in "LR":
-            for k, pats in LIMB.items():
-                self.b[f"{k}.{side}"] = next((_fmt(p, side) for p in pats if _fmt(p, side) in bones), None)
-            for f in FINGERS:
-                for n in (1, 2, 3):
-                    self.b[f"{f}{n}.{side}"] = next((_fmt(p, side, n) for p in FPAT[f] if _fmt(p, side, n) in bones), None)
-        missing = [k for k in ("hips", "head", "upperarm.L", "forearm.L", "hand.L", "thigh.L", "shin.L", "foot.L") if not self.b.get(k)]
-        if missing:
-            raise RuntimeError(f"rig {rig.name}: cannot map bones {missing}")
-        # spine chain = bones between hips and neck/head
-        chain, cur = [], bones[self.b["neck"] or self.b["head"]].parent
-        while cur and cur.name != self.b["hips"]:
-            chain.append(cur.name); cur = cur.parent
-        self.spine = list(reversed(chain))
+        self.b, self.spine = map_bones(rig.data.bones, rig.name)
         self.meshes = [o for o in bpy.data.objects if o.type == "MESH" and (o.parent == rig or any(
             m.type == "ARMATURE" and m.object == rig for m in o.modifiers))]
         self._face_keys()
+        self.face_gain = float(rig.get("s3d_face_gain", 1.0))
         self._calibrate()
 
     # ---------------------------------------------------------- discovery
     def _face_keys(self):
-        """arkit name -> list of (Key datablock, key name) to animate."""
+        """arkit name -> list of (Key datablock, key name). Accepts ARKit keys in any common naming."""
+        import re
         self.face = {}
+        lookup = {k.lower(): k for k in ARKIT}
+        vis = {v.lower(): v for v in VISEMES}
         for o in self.meshes:
             sk = o.data.shape_keys
             if not sk:
                 continue
             for kb in sk.key_blocks:
                 n = kb.name
-                base = n[4:] if n.startswith("!ex-") else n
-                base = base[7:] if base.startswith("viseme_") and base[7:] in VISEMES else base
-                key = ("v:" + base) if n.startswith("viseme_") else base
-                if base in ARKIT or n.startswith("viseme_"):
-                    if any(k[0] == sk and k[1] == n for k in self.face.get(key, [])):
-                        continue
-                    if self._driven(sk, n):
-                        continue
+                if self._driven(sk, n):
+                    continue
+                base = re.sub(r"^(!ex-|AK_\d+_|ARKit[_.]?|blendShape\d*\.|A\d+_)", "", n)
+                low = base.replace("_", "").lower()
+                key = None
+                if low in lookup:
+                    key = lookup[low]
+                else:
+                    m = re.match(r"^(?:viseme_|AA_VI_\d+_|V_)(\w+)$", n)
+                    if m and m.group(1).lower() in vis:
+                        key = "v:" + vis[m.group(1).lower()]
+                if key and not any(k[0] == sk and k[1] == n for k in self.face.get(key, [])):
                     self.face.setdefault(key, []).append((sk, n))
         self.has_face = "jawOpen" in self.face
 
@@ -256,7 +268,7 @@ class Character:
         # numerically calibrate every pole angle: the rest pose must be reproduced exactly (works for any bone roll)
         for side in "LR":
             for chain, tip, mid in (("arm", f"hand.{side}", f"forearm.{side}"), ("leg", f"foot.{side}", f"shin.{side}")):
-                self._calibrate_pole(pb[self.b[mid]].constraints["s3d_ik"], self.b[mid])
+                self._calibrate_pole(pb[self.b[mid]].constraints["s3d_ik"], self.b[mid], chain == "leg")
         look = core.empty(f"{self.name}_look", rig.matrix_world @ (self.eye_mid + Vector((0, -2.0, 0))), c, 0.06, "SPHERE")
         gaze = core.empty(f"{self.name}_gaze", rig.matrix_world @ (self.eye_mid + Vector((0, -2.0, 0))), c, 0.03, "SPHERE")
         self.ctrl["look"], self.ctrl["gaze"] = look, gaze
@@ -271,25 +283,41 @@ class Character:
                 d.track_axis = self.eye_track
         return self.ctrl
 
-    def _calibrate_pole(self, con, mid_bone):
-        """Pick the pole angle that keeps the joint (elbow/knee) exactly where it is in the rest pose."""
-        rig = self.rig; vl = bpy.context.view_layer
-        rest_joint = rig.matrix_world @ rig.data.bones[mid_bone].head_local
+    def _calibrate_pole(self, con, mid_bone, is_leg=False):
+        """Choose the pole angle that makes the elbow/knee point AT the pole target, measured in a bent test pose
+        (works for A-pose and straight T-pose rigs alike, any bone roll)."""
+        rig = self.rig; vl = bpy.context.view_layer; Mw = rig.matrix_world
+        mid = rig.data.bones[mid_bone]; root = mid.parent
+        tgt, pole = con.target, con.pole_target
+        t_old, p_old = tgt.location.copy(), pole.location.copy()
+        S = Mw @ root.head_local; E0 = Mw @ mid.head_local; W0 = Mw @ mid.tail_local
+        L = (E0 - S).length + (W0 - E0).length
+        d = (W0 - S).normalized()
+        tgt.location = S + d * 0.7 * L                     # bent test pose (70 % reach)
+        want = (Mw.to_3x3() @ Vector((0, 1, 0))) if not is_leg else (Mw.to_3x3() @ Vector((0, -1, 0)))  # elbows back, knees forward
+        want = (want - want.project(d)).normalized()
+        pole.location = (S + tgt.location) / 2 + want * 0.6
         con.influence = 1.0
 
-        def err(ang):
+        def score(ang):
             con.pole_angle = ang; vl.update()
-            return (rig.matrix_world @ rig.pose.bones[mid_bone].head - rest_joint).length
-        best = min((err(math.radians(d)), d) for d in range(-180, 180, 10))
+            E = Mw @ rig.pose.bones[mid_bone].head
+            axis_pt = S + (E - S).project(tgt.location - S)
+            off = E - axis_pt
+            return -off.normalized().dot(want) if off.length > 1e-5 else 1.0
+        best = min((score(math.radians(dg)), dg) for dg in range(-180, 180, 10))
         lo, hi = best[1] - 10, best[1] + 10
-        for _ in range(12):  # ternary refine
+        for _ in range(14):
             m1, m2 = lo + (hi - lo) / 3, hi - (hi - lo) / 3
-            if err(math.radians(m1)) < err(math.radians(m2)): hi = m2
+            if score(math.radians(m1)) < score(math.radians(m2)): hi = m2
             else: lo = m1
-        con.pole_angle = math.radians((lo + hi) / 2); vl.update()
-        e = err(con.pole_angle)
-        if e > 0.01:
-            core.log(f"pole calibration {mid_bone}: residual {e*100:.1f} cm")
+        con.pole_angle = math.radians((lo + hi) / 2)
+        tgt.location, pole.location = t_old, p_old
+        vl.update()
+        if score(con.pole_angle) > -0.9:
+            core.log(f"pole calibration {mid_bone}: weak ({score(con.pole_angle):.2f})")
+        tgt.location, pole.location = t_old, p_old
+        vl.update()
 
     @staticmethod
     def _pole_angle(base, tip, pole_loc):
