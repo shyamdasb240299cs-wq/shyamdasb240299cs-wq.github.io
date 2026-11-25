@@ -10,7 +10,7 @@ skin against cool backgrounds, shallow depth of field in close-ups, wide-angle c
   `drama` (hard key, weak fill, strong rim) · `night` (warm practical + blue fill) · `xray` (cyan rims, dark).
 - World: brand-tinted colour at 0.35 strength (ambient + reflections), `sky` for outdoor, or any Poly Haven HDRI.
 - Skin: MakeHuman texture + saturation 1.18 + subsurface (radius R1 G0.35 B0.18, 1.2 cm) + micro-pore bump.
-- Eyes glossy (coat), hair cards blended, clothes sheen, wood/ceramic/bread/metal procedural materials.
+- Eyes glossy (coat), hair cards alpha-clipped (crisp), clothes sheen, wood/ceramic/bread/metal procedural materials.
 - Camera DOF on the subject; f-stops by shot size; motion blur on final renders.
 
 ## Quality levels

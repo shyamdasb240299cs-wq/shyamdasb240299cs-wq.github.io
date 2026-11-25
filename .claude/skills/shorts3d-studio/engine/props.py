@@ -188,6 +188,16 @@ def curve_tube(name, points, radius, coll=None, material=None, res=4):
     ob = bpy.data.objects.new(name, me); (coll or bpy.context.scene.collection).objects.link(ob)
     if material: me.materials.append(material)
     me.polygons.foreach_set("use_smooth", [True] * len(me.polygons))
+    # remember the centre-line (for flow particles that travel along wires/pipes)
+    from mathutils.geometry import interpolate_bezier
+    pts = [Vector(p) for p in points]
+    line = []
+    for i in range(len(pts) - 1):
+        a_, b_ = pts[i], pts[i + 1]
+        h1 = a_ + (b_ - (pts[i - 1] if i > 0 else a_)) / 6; h2 = b_ - ((pts[i + 2] if i + 2 < len(pts) else b_) - a_) / 6
+        line += interpolate_bezier(a_, h1, h2, b_, 10)[:-1]
+    line.append(pts[-1])
+    ob["s3d_path"] = [c for p in line for c in p]
     return ob
 
 
@@ -294,9 +304,13 @@ def normalize_size(ob, size_cm=None):
     mx = Vector((max(v.x for v in xs), max(v.y for v in xs), max(v.z for v in xs)))
     c = Vector(((mn.x + mx.x) / 2, (mn.y + mx.y) / 2, mn.z))
     me.transform(Matrix.Translation(-c))
+    k = 1.0
     if size_cm:
-        s = (size_cm / 100.0) / max((mx - mn)[:])
-        me.transform(Matrix.Scale(s, 4))
+        k = (size_cm / 100.0) / max((mx - mn)[:])
+        me.transform(Matrix.Scale(k, 4))
+    if "s3d_path" in ob:
+        fl = list(ob["s3d_path"])
+        ob["s3d_path"] = [((fl[i + j] - c[j]) * k) for i in range(0, len(fl), 3) for j in range(3)]
     me.update()
 
 

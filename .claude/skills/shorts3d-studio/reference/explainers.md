@@ -2,6 +2,10 @@
 
 Rule: every mechanism sentence gets a NEW way of seeing inside. Pick the cheapest device that makes the idea obvious.
 
+Never hide the mechanism inside an opaque prop (the camera then sees only the shell): put the parts in the open in a
+`macro`/`inside` scene, or make the shell `glass`. Build the inside at a readable scale (10–30 cm) and frame it with
+`insert`/`macro`; `pop` parts in on the words that name them.
+
 ## Device menu (cheapest first)
 | device | spec | best for |
 |---|---|---|
@@ -42,8 +46,9 @@ scenes:
 Gear meshing: rotate neighbours in opposite directions with speeds inversely proportional to teeth counts.
 
 ### Recipe: electricity in a wall
-`outlet` on a `room` wall + `wire` paths behind it + `flow` along the wire path (`color: "#9FE8FF"`) + `lightning`
-at the contact + `glow` on the plug prongs. Camera: `insert` push-in on the plug, then cut to a `macro` inside scene.
+Room scene: the actor grabs a `plug` (hook). Inside scene (see `templates/howitworks.yaml`): big `outlet` faceplate,
+two `wire` props, `flow: {along: wire_hot}` + `flow: {along: wire_neu}`, a `coil` that `pop`s in, then `glow` +
+`lightning` on the payoff word. Camera: `insert` push-in on the plug, then `insert`/`macro` inside.
 
 ### Recipe: body / anatomy
 X-ray or cutaway on the actor, inner organ props placed at the bone positions (`at: hero.chest`). Free organ models:

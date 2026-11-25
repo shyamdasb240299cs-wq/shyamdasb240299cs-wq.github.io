@@ -35,7 +35,7 @@ scenes:
     props:
       crumb: {src: proc:bread_slice, at: [0, 0, 0.0], yaw: 0}
     fx:
-      - {type: flow, path: [[-0.04, -0.02, 0.012], [0.0, 0.0, 0.03], [0.05, 0.02, 0.012]], color: "#3EC6E0", from: S03, to: S04.end}
+      - {type: flow, path: [[-0.04, -0.02, 0.012], [0.0, 0.0, 0.03], [0.05, 0.02, 0.012]], color: "#3EC6E0", start: S03, end: S04.end}
 
 shots:
   - id: S01                                  # HOOK: hands + object, mid-action, frame 0

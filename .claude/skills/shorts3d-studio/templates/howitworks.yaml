@@ -17,24 +17,26 @@ scenes:
       - hero.grasp: {prop: plug}
       - hero.lift:  {to: show}
       - hero.face:  {expr: curious, at: S02, dur: 2}
-  inside:
+  inside:                                    # the hidden world behind the faceplate (macro scale)
     set: {preset: studio, light: soft}
     props:
-      wall_slot: {src: proc:box, at: [0, 0, 0], color: "#E9EEF2", size_cm: 20}
-      wire_hot:  {src: proc:wire, params: {points: [[-0.12, 0.02, 0.05], [0.0, 0.02, 0.09], [0.12, 0.02, 0.05]], color: "#D23B2E"}, at: [0, 0, 0.0], free: true}
-      wire_neu:  {src: proc:wire, params: {points: [[-0.12, -0.02, 0.05], [0.0, -0.02, 0.07], [0.12, -0.02, 0.05]], color: "#2E5BD2"}, at: [0, 0, 0.0], free: true}
-      coil:      {src: proc:coil, at: [0, 0, 0.0], free: true}
+      faceplate: {src: proc:outlet, params: {style: us}, size_cm: 30, at: [0, 0.18, 0.0], free: true}
+      wire_hot:  {src: proc:wire, params: {points: [[-0.2, 0, 0], [-0.08, -0.05, 0.03], [0.05, -0.12, 0.01], [0.16, -0.2, 0]], r: 0.004, color: "#D23B2E"}, at: [0.02, -0.04, 0.01], free: true}
+      wire_neu:  {src: proc:wire, params: {points: [[-0.2, 0, 0], [-0.1, -0.07, 0.03], [0.02, -0.15, 0.01], [0.12, -0.24, 0]], r: 0.004, color: "#2E5BD2"}, at: [-0.03, -0.07, 0.01], free: true}
+      coil:      {src: proc:coil, params: {r: 0.02, length: 0.07, turns: 12, wire: 0.002}, at: [0.17, -0.25, 0.0], free: true}
     script:
       - coil.pop: {at: S04}
     fx:
-      - {type: flow, path: [[-0.12, 0.02, 0.06], [0.0, 0.02, 0.1], [0.12, 0.02, 0.06]], color: "#FFD43B", from: S03, to: S05.end}
-      - {type: lightning, from: [-0.02, 0.0, 0.12], to: [0.02, 0.0, 0.16], color: "#9FE8FF", from: S05, to: S05.end}
+      - {type: flow, along: wire_hot, color: "#FFD43B", count: 30, start: S03, end: S05.end}
+      - {type: flow, along: wire_neu, color: "#9FE8FF", count: 30, start: S03, end: S05.end}
+      - {type: glow, target: coil, color: "#FFB020", start: S05, end: S05.end}
+      - {type: lightning, from: coil, to: [0.12, -0.2, 0.12], color: "#9FE8FF", start: S05, end: S05.end}
 
 shots:
   - {id: S01, scene: room, say: "Every time you plug something in, you're grabbing a river of electrons.",
      cam: {size: insert, target: plug, angle: right, move: push_in}, sfx: [{name: whoosh, at: 0}]}
   - {id: S02, scene: room, say: "But they don't actually flow into your phone.", cam: {size: cu, target: hero.face, angle: front_left}}
-  - {id: S03, scene: inside, say: "Inside the wall, two wires carry *alternating* current,", cam: {size: macro, target: wall_slot, move: orbit, el: 35}}
+  - {id: S03, scene: inside, say: "Inside the wall, two wires carry *alternating* current,", cam: {size: insert, target: wire_hot, move: orbit, el: 40}}
   - {id: S04, scene: inside, say: "pushing the electrons back and forth sixty times a second.", cam: {size: insert, target: coil, angle: front, move: push_in}}
   - {id: S05, scene: inside, say: "They barely move. It's the *push* that travels, at nearly the speed of light,",
      cam: {size: macro, target: coil, angle: front_right}, sfx: [{name: zap, at: "w:push"}]}

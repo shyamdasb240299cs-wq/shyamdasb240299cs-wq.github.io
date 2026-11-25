@@ -53,33 +53,61 @@ def xray(objs, f0, f1, color="#3EC6E0", fade=6, inner=(), frames=None):
         _vis(o, f0, f1, frames)
 
 
-# ------------------------------------------------------------------ cutaway hole
-def cutaway(targets, center, normal, radius, f0, f1, frames, bone_parent=None, rim_color="#3EC6E0", inner=()):
-    """Round hole through targets (e.g. shirt + body) along `normal`, with a glowing rim ring."""
+# ------------------------------------------------------------------ cutaway hole (shader-based: robust on any mesh)
+def cutaway(targets, center, normal, radius, f0, f1, frames, bone_parent=None, rim_color="#3EC6E0", inner=(), fade=5):
+    """Round window through targets (e.g. shirt + body) facing `normal`: surfaces inside the radius on the
+    front side turn transparent; inner (back-facing) surfaces render as a dark body cavity; glowing rim."""
     n = Vector(normal).normalized()
-    cut = bpy.data.objects.new("cutter", bpy.data.meshes.new("cutter"))
-    bm = bmesh.new(); bmesh.ops.create_cone(bm, cap_ends=True, segments=48, radius1=radius, radius2=radius, depth=0.5)
-    bm.to_mesh(cut.data); bm.free(); bpy.context.scene.collection.objects.link(cut)
     q = n.to_track_quat("Z", "Y")
+    cut = bpy.data.objects.new("s3d_cutter", None); bpy.context.scene.collection.objects.link(cut)
+    cut.empty_display_type = "CIRCLE"; cut.empty_display_size = radius
     cut.matrix_world = Matrix.Translation(center) @ q.to_matrix().to_4x4()
-    cut.hide_render = True; cut.display_type = "WIRE"
     ring = bpy.data.objects.new("cut_rim", bpy.data.meshes.new("rim"))
     bm = bmesh.new(); bmesh.ops.create_circle(bm, segments=64, radius=radius); bm.to_mesh(ring.data); bm.free()
     bpy.context.scene.collection.objects.link(ring)
-    ring.matrix_world = Matrix.Translation(center + n * 0.02) @ q.to_matrix().to_4x4()
-    sc = ring.modifiers.new("w", "WIREFRAME"); sc.thickness = 0.006
+    ring.matrix_world = Matrix.Translation(center + n * 0.03) @ q.to_matrix().to_4x4()
+    wf = ring.modifiers.new("w", "WIREFRAME"); wf.thickness = 0.006
     ring.data.materials.append(_emit_mat("rim_" + rim_color, rim_color, 6))
-    if bone_parent:
+    if bone_parent:  # follow the chest bone exactly (bone parents are measured from the bone TAIL)
         rig, bn = bone_parent
+        pb = rig.pose.bones[bn]
+        P_ = rig.matrix_world @ pb.matrix @ Matrix.Translation((0, pb.length, 0))
         for o in (cut, ring):
-            mw = o.matrix_world.copy(); o.parent = rig; o.parent_type = "BONE"; o.parent_bone = bn
-            o.matrix_world = mw
+            mw = o.matrix_world.copy()
+            o.parent = rig; o.parent_type = "BONE"; o.parent_bone = bn
+            o.matrix_parent_inverse = P_.inverted()
+            o.matrix_basis = mw
     for t in targets:
-        mod = t.modifiers.new("s3d_cut", "BOOLEAN"); mod.operation = "DIFFERENCE"; mod.object = cut
-        if "EXACT" in [i.identifier for i in mod.bl_rna.properties["solver"].enum_items]: mod.solver = "EXACT"
-        for fr, on in ((frames[0], False), (f0 - 1, False), (f0, True), (f1, True), (f1 + 1, False)):
-            mod.show_render = on; mod.keyframe_insert("show_render", frame=fr)
-            mod.show_viewport = on; mod.keyframe_insert("show_viewport", frame=fr)
+        for slot in t.material_slots:
+            m = slot.material
+            if not m: continue
+            m = m.copy(); slot.material = m
+            nt = m.node_tree; nd = nt.nodes; L = nt.links
+            out = next(x for x in nd if x.type == "OUTPUT_MATERIAL")
+            src = out.inputs["Surface"].links[0].from_socket
+            tc = nd.new("ShaderNodeTexCoord"); tc.object = cut
+            sep = nd.new("ShaderNodeSeparateXYZ"); L.new(tc.outputs["Object"], sep.inputs[0])
+            comb = nd.new("ShaderNodeCombineXYZ"); L.new(sep.outputs["X"], comb.inputs["X"]); L.new(sep.outputs["Y"], comb.inputs["Y"])
+            ln = nd.new("ShaderNodeVectorMath"); ln.operation = "LENGTH"; L.new(comb.outputs[0], ln.inputs[0])
+            inside = nd.new("ShaderNodeMath"); inside.operation = "LESS_THAN"; inside.inputs[1].default_value = radius
+            L.new(ln.outputs["Value"], inside.inputs[0])
+            front = nd.new("ShaderNodeMath"); front.operation = "GREATER_THAN"; front.inputs[1].default_value = -0.03
+            L.new(sep.outputs["Z"], front.inputs[0])
+            hole = nd.new("ShaderNodeMath"); hole.operation = "MULTIPLY"; L.new(inside.outputs[0], hole.inputs[0]); L.new(front.outputs[0], hole.inputs[1])
+            on = nd.new("ShaderNodeValue"); on.name = "s3d_cut_on"
+            for fr, v in ((frames[0], 0.0), (f0, 0.0), (f0 + fade, 1.0), (f1 - fade, 1.0), (f1, 0.0)):
+                on.outputs[0].default_value = v; on.outputs[0].keyframe_insert("default_value", frame=max(frames[0], fr))
+            fac = nd.new("ShaderNodeMath"); fac.operation = "MULTIPLY"; L.new(hole.outputs[0], fac.inputs[0]); L.new(on.outputs[0], fac.inputs[1])
+            geo = nd.new("ShaderNodeNewGeometry")
+            cav = nd.new("ShaderNodeBsdfPrincipled"); core.set_input(cav, "Base Color", core.hexcol("#5A1218")); core.set_input(cav, "Roughness", 0.45)
+            core.set_input(cav, "Subsurface Weight", 0.3)
+            bf = nd.new("ShaderNodeMath"); bf.operation = "MULTIPLY"; L.new(geo.outputs["Backfacing"], bf.inputs[0]); L.new(on.outputs[0], bf.inputs[1])
+            back = nd.new("ShaderNodeMixShader"); L.new(bf.outputs[0], back.inputs[0]); L.new(src, back.inputs[1]); L.new(cav.outputs[0], back.inputs[2])
+            tr = nd.new("ShaderNodeBsdfTransparent")
+            mx = nd.new("ShaderNodeMixShader"); L.new(fac.outputs[0], mx.inputs[0]); L.new(back.outputs[0], mx.inputs[1]); L.new(tr.outputs[0], mx.inputs[2])
+            L.new(mx.outputs[0], out.inputs["Surface"])
+            if hasattr(m, "surface_render_method"): m.surface_render_method = "DITHERED"
+            m.use_backface_culling = False
     _vis(ring, f0, f1, frames)
     for o in inner:
         _vis(o, f0, f1, frames)

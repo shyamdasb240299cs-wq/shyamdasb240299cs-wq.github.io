@@ -96,7 +96,7 @@ def apply_fx(item, frames, objs, chars, brand, cams):
         fx.xray(tgt("target"), f0, f1, col, inner=inner, frames=frames)
     elif t == "cutaway":
         ch = chars.get(item["target"])
-        bpy.context.scene.frame_set(f0)
+        bpy.context.scene.frame_set(f0); bpy.context.view_layer.update()
         c = resolve_point(item.get("at", item["target"] + ".chest"), objs, chars)
         nrm = (ch.rig.matrix_world.to_quaternion() @ ch.fwd) if ch else Vector(item.get("normal", (0, -1, 0)))
         targets = [o for o in ch.meshes if o.get("s3d_part") in ("body", "clothes")] if ch else tgt("target")
@@ -115,8 +115,12 @@ def apply_fx(item, frames, objs, chars, brand, cams):
     elif t == "glass":
         fx.glass(objs[item["target"]])
     elif t == "flow":
-        pts = [resolve_point(p, objs, chars) for p in item["path"]]
-        fx.flow(item.get("name", f"flow_{f0}"), pts, f0, f1, frames, col, int(item.get("count", 24)))
+        if item.get("along") in objs and "s3d_path" in objs[item["along"]]:
+            ob = objs[item["along"]]; fl = list(ob["s3d_path"])
+            pts = [ob.matrix_world @ Vector(fl[i:i + 3]) for i in range(0, len(fl), 3)]
+        else:
+            pts = [resolve_point(p, objs, chars) for p in item["path"]]
+        fx.flow(item.get("name", f"flow_{f0}"), pts, f0, f1, frames, col, int(item.get("count", 24)), float(item.get("radius", 0.006)))
     elif t == "lightning":
         fx.lightning(item.get("name", f"bolt_{f0}"), resolve_point(item["from"], objs, chars), resolve_point(item["to"], objs, chars), f0, f1, frames, col)
     elif t == "exploded":
@@ -217,12 +221,14 @@ def main():
         tg = sh.get("cam", {}).get("target", "actor")
         base, _, part = tg.partition(".") if isinstance(tg, str) else ("", "", "")
         if base in chars:
-            sh["_target_fn"] = (lambda c=chars[base], pt=(part or "face"): camera._part_point(c, pt if pt != "object" else "hand_R"))
+            dp = camera.SIZES.get(sh.get("cam", {}).get("size", "medium"), camera.SIZES["medium"])["part"]
+            sh["_target_fn"] = (lambda c=chars[base], pt=(part or dp): camera._part_point(c, pt if pt != "object" else "hand_R"))
         elif base in objs:
             sh["_target_fn"] = (lambda o=objs[base]: (lambda mn_mx: (mn_mx[0] + mn_mx[1]) / 2)(core.world_bbox(o)))
     if shots:
         sc.camera = cams[shots[0]["id"]]
     for it in S.get("fx", []):
+        it = dict(it); it["f1"] = min(int(it.get("f1", frames[-1])), frames[-1])
         apply_fx(it, frames, objs, chars, brand, cams)
     for sh in shots:
         for it in sh.get("fx", []):
@@ -270,6 +276,8 @@ def main():
     json.dump(anchors, open(os.path.join(out, f"anchors_{scene_name}.json"), "w"))
     # render
     q = {"sheet": "preview", "blocking": "blocking", "draft": "draft", "preview": "preview", "final": "final", "cycles": "cycles"}[quality]
+    if quality == "sheet" and opts.get("fast"):
+        q = "blocking"
     sets.render(q, tuple(plan.get("res", (1080, 1920))), fps)
     if quality == "sheet":
         sc.render.resolution_percentage = int(opts.get("pct", 40))

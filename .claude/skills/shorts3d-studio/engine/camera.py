@@ -38,9 +38,9 @@ def _part_point(char, part, rig_eval=True):
         return M @ pb[char.b[f"hand.{part[-1]}"]].head
     if part == "upper":
         return _part_point(char, "face").lerp(_part_point(char, "chest"), 0.35)
-    if part == "chest":
+    if part == "chest":  # mid-sternum (heart/lungs level)
         b = char.spine[-1] if char.spine else char.b["hips"]
-        return M @ pb[b].tail
+        return (M @ pb[b].head).lerp(M @ pb[b].tail, 0.35)
     if part == "waist":
         return (M @ pb[char.b["hips"]].head) + Vector((0, 0, 0.15))
     return (M @ pb[char.b["hips"]].head)  # body

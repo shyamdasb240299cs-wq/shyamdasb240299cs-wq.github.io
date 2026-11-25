@@ -24,7 +24,7 @@ set:   {preset: studio|kitchen|room|outdoor|void, color: "#hex", light: soft|bri
 props: {<name>: {...}}       # created in order; supports before the things that sit on them
 cast:  {<actor>: {...}}
 script: [ {<actor|prop>.<verb>: {args}} , ... ]
-fx:    [ {...} ]             # scene-wide FX with from/to anchors
+fx:    [ {...} ]             # scene-wide FX: time range with start/end anchors
 ```
 Set objects you can put things on: kitchen → `counter`; every set → `floor`.
 
@@ -77,9 +77,10 @@ Common args: `at:` anchor · `delay: s` · `with: prev` (start together with the
 `pop` (scale in w/ overshoot) · `move {to, dur}` · `spin {deg, dur}` · `fall` (gravity + bounce onto surface) ·
 `shake {dur}` · `hide` / `show`.
 
-## Anchors (`at:`, `from:`, `to:`)
+## Anchors (`at:`, `start:`, `end:`)
 `S03` shot start · `S03.end` shot end · `S03+0.4` · `"w:crystals"` time the word is spoken (`"w:it#2"` 2nd occurrence,
-`"w:it+0.2"`) · number = absolute seconds (script) or seconds inside the shot (shot fx: `from: 0.3, to: -0.2`).
+`"w:it+0.2"`) · number = absolute seconds (script, scene fx) or seconds inside the shot (shot fx: `start: 0.3, end: -0.2`).
+`from:`/`to:` are always POSITIONS (arrow/lightning endpoints), never times.
 
 ## shots[]
 ```yaml
@@ -104,7 +105,7 @@ Common args: `at:` anchor · `delay: s` · `with: prev` (start together with the
 | `move` | `static push_in pull_out orbit crane_up crane_down dolly_zoom snap_zoom handheld` · `amount: 1.0` |
 | `lens`, `dist`, `fstop`, `dof: false`, `roll`, `shake`, `lock: true` (no follow), `look` (POV target) |
 
-### fx (shot-level default to the shot's time range; scene-level need from/to)
+### fx (shot-level default to the shot's time range; scene-level use start/end)
 | type | args |
 |---|---|
 | `xray` | `target: hero|<prop>`, `inner: [props]`, `color` — skin/clothes turn into glowing translucent shell |
@@ -113,7 +114,7 @@ Common args: `at:` anchor · `delay: s` · `with: prev` (start together with the
 | `label` | `text`, `at`, `offset: [0,0,0.08]`, `size: 0.06`, `color` — billboard 3D text, pops in |
 | `glow` | `target`, `color`, `strength` — pulsing emission |
 | `glass` | `target` — make a shell transparent to see the mechanism inside |
-| `flow` | `path: [p1, p2, ...]`, `count`, `color` — particles streaming (blood, air, current) |
+| `flow` | `along: <wire/pipe prop>` (follows its centre-line) or `path: [p1, p2, ...]`, `count`, `radius`, `color` — particles streaming (blood, air, current) |
 | `lightning` | `from`, `to`, `color` — flickering electric arc |
 | `exploded` | `parts: [...]`, `center`, `dist` — parts slide apart and back |
 | `crumbs` | `at: hero.mouth`, `count`, `floor_z` — debris falling with gravity |

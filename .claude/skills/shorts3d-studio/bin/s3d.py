@@ -112,21 +112,44 @@ def brand(c=None):
 def _dl(url, dst):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     if not os.path.exists(dst):
-        print(f"  downloading {os.path.basename(dst)} ..."); urllib.request.urlretrieve(url, dst)
+        print(f"  downloading {os.path.basename(dst)} ...")
+        req = urllib.request.Request(url, headers={"User-Agent": "shorts3d-studio/1.0"})
+        with urllib.request.urlopen(req, timeout=600) as r, open(dst + ".part", "wb") as f:
+            shutil.copyfileobj(r, f)
+        os.replace(dst + ".part", dst)
     return dst
+
+
+def _mpfb_data(dst_dir, dl):
+    """MakeHuman base data (CC0 assets inside the MPFB repo): zip, codeload, or git clone fallback."""
+    for url in (MPFB_ZIP, "https://codeload.github.com/makehumancommunity/mpfb2/zip/refs/heads/master"):
+        try:
+            z = _dl(url, os.path.join(dl, "mpfb2.zip"))
+            with zipfile.ZipFile(z) as zf:
+                for n in zf.namelist():
+                    m = re.match(r"^[^/]+/src/mpfb/data/(.+)$", n)
+                    if m and not n.endswith("/"):
+                        p = os.path.join(dst_dir, m.group(1)); os.makedirs(os.path.dirname(p), exist_ok=True)
+                        with zf.open(n) as src, open(p, "wb") as out: shutil.copyfileobj(src, out)
+            return True
+        except Exception as e:
+            print(f"  ({url.split('/')[2]} failed: {e}; trying next source)")
+    if shutil.which("git"):
+        tmp = os.path.join(dl, "mpfb2_git")
+        shutil.rmtree(tmp, ignore_errors=True)
+        if subprocess.run(["git", "clone", "-q", "--depth", "1", "https://github.com/makehumancommunity/mpfb2.git", tmp]).returncode == 0:
+            shutil.copytree(os.path.join(tmp, "src", "mpfb", "data"), dst_dir, dirs_exist_ok=True)
+            shutil.rmtree(tmp, ignore_errors=True)
+            return True
+    return False
 
 
 def cmd_setup(a):
     c = cfg(); os.makedirs(HOME, exist_ok=True)
     dl = os.path.join(HOME, "downloads")
     if not os.path.exists(os.path.join(c["mh_data"], "3dobjs", "base.obj")):
-        z = _dl(MPFB_ZIP, os.path.join(dl, "mpfb2.zip"))
-        with zipfile.ZipFile(z) as zf:
-            for n in zf.namelist():
-                m = re.match(r"^[^/]+/src/mpfb/data/(.+)$", n)
-                if m and not n.endswith("/"):
-                    p = os.path.join(c["mh_data"], m.group(1)); os.makedirs(os.path.dirname(p), exist_ok=True)
-                    with zf.open(n) as src, open(p, "wb") as dst: shutil.copyfileobj(src, dst)
+        if not _mpfb_data(c["mh_data"], dl):
+            sys.exit("could not download the MakeHuman base data (check internet / install git)")
         print("  MakeHuman base data ready (CC0 assets from the MPFB repository)")
     for u in PACKS:
         z = _dl(u, os.path.join(dl, os.path.basename(u)))
@@ -304,23 +327,23 @@ def cmd_plan(a, quiet=False):
             if "at" in args:
                 args["at_s"] = anchor(args.pop("at"))
             S["script"].append({"who": who, "verb": verb, "args": args})
-        for fxi in S.get("fx", []) or []:
-            if "from" in fxi: fxi["f0"] = round(anchor(fxi["from"]) * fps)
-            if "to" in fxi: fxi["f1"] = round(anchor(fxi["to"]) * fps)
+        for fxi in S.get("fx", []) or []:  # scene fx: time range = start/end anchors (from/to are positions)
+            fxi["f0"] = round((anchor(fxi.pop("start", 0.0)) or 0.0) * fps)
+            fxi["f1"] = round((anchor(fxi.pop("end", None)) or 1e4) * fps)
         scenes[nm] = S
     out_shots = []
     for s, row in zip(shots, tl):
         o = {"id": s["id"], "scene": s.get("scene"), "f0": row["f0"], "f1": row["f1"], "cam": s.get("cam", {}),
              "overlays": s.get("overlays", [])}
         fxl = []
-        def rel(v, end=False):  # numbers are seconds inside the shot (negative 'to' counts from the shot end)
+        def rel(v, end=False):  # numbers are seconds inside the shot (negative 'end' counts from the shot end)
             if isinstance(v, (int, float)):
                 return (row["t1"] + v) if (end and v < 0) else (row["t0"] + v)
             return anchor(v)
         for fxi in s.get("fx", []) or []:
             fxi = dict(fxi)
-            if "from" in fxi: fxi["f0"] = round(rel(fxi.pop("from")) * fps)
-            if "to" in fxi: fxi["f1"] = round(rel(fxi.pop("to"), True) * fps)
+            if "start" in fxi: fxi["f0"] = round(rel(fxi.pop("start")) * fps)
+            if "end" in fxi: fxi["f1"] = round(rel(fxi.pop("end"), True) * fps)
             fxl.append(fxi)
         o["fx"] = fxl
         out_shots.append(o)
@@ -362,7 +385,7 @@ def cmd_build(a):
         if a.q == "sheet" and os.path.isdir(os.path.join(out, "sheet")):
             shutil.rmtree(os.path.join(out, "sheet"))
         cmd = [bl, "-b", "--factory-startup", "-P", os.path.join(SKILL, "engine", "build.py"), "--",
-               os.path.join(d, "build", "plan.json"), sc, out, a.q] + ([f"shots={a.shots}"] if a.shots else []) + ([f"step={a.step}"] if a.step else [])
+               os.path.join(d, "build", "plan.json"), sc, out, a.q] + ([f"shots={a.shots}"] if a.shots else []) + ([f"step={a.step}"] if a.step else []) + (["fast=1"] if a.fast else [])
         log = os.path.join(d, "build", "logs", f"{sc}_{a.q}.log")
         procs.append((sc, log, subprocess.Popen(cmd, stdout=open(_mk(log), "w"), stderr=subprocess.STDOUT)))
         if len([p for p in procs if p[2].poll() is None]) >= a.jobs:
@@ -478,6 +501,7 @@ def main():
     p = sp.add_parser("build"); p.add_argument("slug"); p.add_argument("--q", default="sheet",
                                                                      choices=["sheet", "blocking", "draft", "preview", "final", "cycles"])
     p.add_argument("--shots"); p.add_argument("--scene"); p.add_argument("--jobs", type=int, default=1); p.add_argument("--step", type=int)
+    p.add_argument("--fast", action="store_true", help="sheet stills in solid shading (seconds; checks motion/contacts/framing)")
     p = sp.add_parser("analyze"); p.add_argument("video"); p.add_argument("--out")
     p = sp.add_parser("assets"); p.add_argument("query"); p.add_argument("--hdri", action="store_true"); p.add_argument("-n", type=int, default=12)
     p = sp.add_parser("brand"); p.add_argument("--name"); p.add_argument("--color"); p.add_argument("--accent"); p.add_argument("--logo"); p.add_argument("--font")

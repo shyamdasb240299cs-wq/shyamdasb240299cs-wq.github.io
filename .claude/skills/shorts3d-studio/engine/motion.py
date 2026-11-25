@@ -135,7 +135,7 @@ class Performer:
     def rest_hand(self, s, t):
         ch = self.ch; sg = 1 if s == "L" else -1
         sh = ch.arm_head(f"upperarm.{s}")
-        w = Vector((sh.x + sg * 0.05, sh.y - 0.015, sh.z - ch.arm_len * 0.9))
+        w = Vector((sh.x + sg * 0.07, sh.y - 0.02, sh.z - ch.arm_len * 0.95))
         D = self.deltas_at(t)
         cb = ch.b.get(f"shoulder.{s}") or ch.spine[-1]
         shp = self.posed_point(D, cb, sh, self.crouch.at(t))
@@ -620,7 +620,7 @@ class Performer:
         self.face.expr(a.get("expr", "confused"), t0, t0 + 0.3 + hold)
         for s in "LR":
             g = self._sg(s)
-            t = self._gesture(s, t0, 0.35, hold, (g * 0.3, -0.26, -0.42), (0, 0, 1), (g * 0.6, -0.8, 0), OPEN)
+            t = self._gesture(s, t0, 0.35, hold, (g * 0.25, -0.22, -0.36), (0, 0, 1), (g * 0.6, -0.8, 0), OPEN)
         return t
 
     def v_facepalm(self, t0, a):
@@ -811,8 +811,8 @@ class Performer:
         sh = ch.arm_head(f"upperarm.{s}")
         M = self.M(t)
         wl = M.inverted() @ wrist
-        u = smooth((wl.z - (sh.z - 0.45)) / 0.45)
-        return M @ Vector((sh.x + g * (0.2 + 0.35 * u), sh.y + 0.45 * (1 - u) + 0.05, sh.z - 0.3 - 0.15 * u))
+        u = smooth((wl.z - (sh.z - 0.45)) / 0.45)  # 0 = arm hanging, 1 = hand raised (to mouth/face)
+        return M @ Vector((sh.x + g * (0.04 + 0.3 * u), sh.y + 0.55 * (1 - u) + 0.05, sh.z - 0.3 - 0.15 * u))
 
     def _bake_fingers(self, kw, frames):
         rig = self.ch.rig
