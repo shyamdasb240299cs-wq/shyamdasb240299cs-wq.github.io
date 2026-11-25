@@ -21,6 +21,7 @@ def Rz(a):
     return Quaternion((0, 0, 1), a)
 
 
+HIP_SHARE = 0.35  # share of a forward lean taken by the hip joints (pelvis tilts) - spine alone looks hunched
 HINGE = 0.45      # crouching pushes the pelvis back 0.45 m per metre of drop (hip hinge keeps balance)
 TURNOUT = math.radians(7)  # natural stance: toes turned out
 NOGAIN = ("jaw", "eyeBlink", "eyeLook", "v:", "mouthClose", "tongue")
@@ -52,6 +53,10 @@ class Performer:
         self.pole_out = {s: Track(0.0) for s in "LR"}  # 1 = elbow flares outward (hands on hips, crossed arms)
         self.curl = {s: {f: Track(v) for f, v in RELAX.items()} for s in "LR"}
         self.spread = {s: Track(0.0) for s in "LR"}
+        self.topp = {s: Track(0.0) for s in "LR"}   # thumb opposition (0 rest .. 1 facing the finger pads)
+        self.tabd = {s: Track(0.0) for s in "LR"}   # thumb radial abduction (0 rest .. 1 spread wide)
+        self.exact = {s: Track(0.0) for s in "LR"}  # 1 = contact moment: hand rotation must stay exact
+        self.qa_notes = []
         eye = self._to_world(ch.eye_mid, start, yaw)
         ahead = eye + Rz(yaw) @ Vector((0, -2.5, 0))
         self.look = Track(ahead).key(0, ahead, "hold")
@@ -94,12 +99,13 @@ class Performer:
         """Armature-space total rotation of every torso bone - the SAME model the bake writes."""
         ch = self.ch; D = {}
         hips = ch.b["hips"]
-        D[hips] = Quaternion((0, 0, 1), pyaw) @ Quaternion((1, 0, 0), back * 0.3)
+        hip = HIP_SHARE * lean  # forward bends: ~35 % at the hip joints, the rest spread up the spine
+        D[hips] = Quaternion((0, 0, 1), pyaw) @ Quaternion((1, 0, 0), back * 0.3 + hip)
         nsp = max(1, len(ch.spine)); top = D[hips]
         tw = twist - pyaw
         for i, bn in enumerate(ch.spine):
             fr = (i + 1) / nsp
-            D[bn] = Quaternion((1, 0, 0), lean * fr + back * fr + breath * 2 * (i == nsp - 1)) @ Quaternion((0, 0, 1), tw * fr)
+            D[bn] = Quaternion((1, 0, 0), hip + (lean - hip) * fr + back * fr + breath * 2 * (i == nsp - 1)) @ Quaternion((0, 0, 1), tw * fr)
             top = D[bn]
         for bn, k in ((ch.b.get("neck"), 0.4), (ch.b.get("head"), 1.0)):
             if bn:
@@ -186,17 +192,23 @@ class Performer:
         else:
             w = wr.lerp(self.hw[s].at(t) + self.hcorr[s].at(t), k) + self.ha[s].at(t)
             q = qr.slerp(self.hq[s].at(t), k)
-        if k < 1.0:  # free / gesturing hands obey anatomy; grasps keep their exact contact orientation
-            q = q.slerp(self._wrist_limit(s, t, w, q), 1.0 - k)
+        lim_w = max(1.0 - k, 1.0 - self.exact[s].at(t))  # holds obey anatomy too; contact moments stay exact
+        if lim_w > 0:
+            q = q.slerp(self._wrist_limit(s, t, w, q), lim_w)
         return w, q
 
-    WRIST = {"flex": 75, "ext": 60, "dev": 25, "twist": 95}  # degrees, measured from the forearm
+    def _exact(self, s, t0, t1, ramp=0.12):
+        """Mark a contact moment (grasp closing, placing, bite, sip): the hand keeps its planned rotation."""
+        tr = self.exact[s]
+        tr.key(t0 - ramp, tr.at(t0 - ramp), "hold").key(t0, 1.0, "smooth").key(t1, 1.0, "hold").key(t1 + ramp, 0.0, "smooth")
+
+    WRIST = {"flex": 70, "ext": 50, "dev": 22, "twist": 85}  # degrees from the forearm (comfortable range, not the extreme)
 
     def _wrist_limit(self, s, t, w, q):
         """Clamp the hand to the anatomical range of the wrist (relative to the forearm the IK will produce):
         flexion 75 / extension 60 / deviation 25 deg, pronation-supination 95 deg from 'handshake' neutral."""
         h = self.ch.hand[s]; L1, L2 = self.L_ua[s], self.L_fa[s]
-        S = self.shoulder_world(t, s); P_ = self._elbow_pole(s, t, w)
+        S = self.shoulder_world(t, s); P_ = self._elbow_pole(s, t, w, q)
         d = w - S; dist = min(max(d.length, 1e-4), (L1 + L2) * 0.999); dn = d.normalized()
         a_ = (L1 * L1 - L2 * L2 + dist * dist) / (2 * dist); hh = math.sqrt(max(0.0, L1 * L1 - a_ * a_))
         pv = P_ - S; pv -= pv.project(dn)
@@ -379,7 +391,20 @@ class Performer:
         if face_t:
             t = self._turn(t, self._yaw_to(self._target_point(face_t), t))
         self._look_to(t0, tgt + Vector((0, 0, 0)), head=True)
+        self._carry(t0, t)
         return t
+
+    def _carry(self, t0, t1):
+        """Held objects travel with the body (hold targets are world-space) during walks and turns."""
+        M0 = self.M(t0); M0i, q0i = M0.inverted(), M0.to_quaternion().inverted()
+        for s in "LR":
+            if not (self.holding[s] and self.hs[s].at(t0) > 0.5):
+                continue
+            w0, h0 = M0i @ self.hw[s].at(t0), q0i @ self.hq[s].at(t0)
+            n = max(2, int((t1 - t0) / 0.1))
+            for i in range(1, n + 1):
+                t = t0 + (t1 - t0) * i / n; M = self.M(t)
+                self.hw[s].key(t, M @ w0, "lin"); self.hq[s].key(t, M.to_quaternion() @ h0, "lin")
 
     def _obstacles(self):
         out = []
@@ -423,7 +448,9 @@ class Performer:
         return math.atan2(d.x, -d.y)
 
     def v_turn_to(self, t0, a):
-        return self._turn(t0, self._yaw_to(self._target_point(a["target"]), t0))
+        t = self._turn(t0, self._yaw_to(self._target_point(a["target"]), t0))
+        self._carry(t0, t)
+        return t
 
     def _turn(self, t0, yaw_t):
         y0 = self.root_yaw.at(t0)
@@ -499,7 +526,13 @@ class Performer:
         g = P.grip(ob, sh, a.get("grip", "auto"), side=s) if ob else {
             "palm_point": p, "palm_n": (p - sh).normalized(), "fingers": (p - sh).normalized(), "approach": (p - sh).normalized(), "type": "point", "width": 0.05}
         q = self.ch.hand_world_rot(s, g["palm_n"], g["fingers"])
-        wg = self.ch.wrist_for_palm(s, g["palm_point"], q)
+        self._plan_t = t0 + 0.8
+        if g["type"] in ("wrap_top", "wrap_side") and ob:
+            g, q = self._plan_wrap(s, q, g, ob)
+        if g["type"] in ("span", "pinch") and ob:
+            wg, q = self._plan_span(s, q, g, ob)
+        else:
+            wg = self.ch.wrist_for_palm(s, g["palm_point"], q)
         pre = wg - g["approach"] * 0.075 + Vector((0, 0, 0.015))
         w0 = self._wrist_now(s, t0)
         T = clamp(0.45 + 0.45 * (pre - w0).length, 0.55, 1.4)
@@ -511,11 +544,163 @@ class Performer:
         for f, c in OPEN.items():
             self.curl[s][f].key(t0, self.curl[s][f].at(t0), "hold").key(t0 + T * 0.7, c + (0.0 if g["type"].startswith("pinch") and f in ("ring", "pinky") else 0), "smooth")
         self.spread[s].key(t0 + T * 0.7, 0.6, "smooth")
+        if g["type"] in ("span", "pinch"):  # thumb swings out and starts to oppose while the hand travels
+            self.topp[s].key(t0, self.topp[s].at(t0), "hold").key(t0 + T * 0.8, 0.25, "smooth")
         lean, crouch = self._reach_posture(s, t0 + T, wg)
         self.lean.key(t0, self.lean.at(t0), "hold").key(t0 + T, lean, "mj")
         self.crouch.key(t0, self.crouch.at(t0), "hold").key(t0 + T, crouch, "mj")
         self._pending = {"side": s, "grip": g, "wg": wg, "q": q, "pre": pre, "prop": tgt}
         return t0 + T
+
+    def _anchor_wrist(self, s, q, g):
+        """span/pinch grips: wrist placed so the index pad lands on the far face at a natural curl."""
+        ch = self.ch; Mw = ch.rig.matrix_world
+        c0 = 0.62 if g["type"] == "pinch" else (0.36 if g.get("width", 0) > 0.085 else 0.52)  # wide spans: flatter fingers
+        pts = self._finger_points(s, Mw.inverted() @ q.to_matrix().to_4x4(), ch.finger_quats(s, {"index": c0, "middle": c0}))
+        ch_pts = pts.get("index") or pts.get("middle")
+        if not ch_pts:
+            return ch.wrist_for_palm(s, g["palm_point"], q)
+        tip = Mw @ ch_pts[-1]   # wrist at the world origin -> offset of the index tip
+        return Vector(g["finger_target"]) + Vector(g["fingers"]) * FRAD["index"] * 0.9 - tip
+
+    def _thumb_pad(self, s, H_arm, tree, a, o, c, Tpad, oppose=None):
+        """Thumb pad (world) for abduction a, opposition o, curl c -> (cost, pad). With oppose=(centre, finger
+        centroid) the target is 'touch the surface anywhere on the side opposite the fingers' (power grips)."""
+        ch = self.ch; Mw = ch.rig.matrix_world
+        pw = [Mw @ p for p in self._finger_points(s, H_arm, ch.finger_quats(s, {"thumb": c}, 0.0, o, a))["thumb"]]
+        pad = pw[-2].lerp(pw[-1], 0.6)
+        pen = 0.0
+        for p in pw[3:]:
+            l2, n2, _, dd = tree.find_nearest(p)
+            if l2 is None:
+                continue
+            if (p - l2).dot(n2) < 0:
+                pen = max(pen, dd + FRAD["thumb"])
+            elif dd < FRAD["thumb"] * 0.75:
+                pen = max(pen, FRAD["thumb"] * 0.75 - dd)
+        if oppose is not None:
+            cen, fc = oppose
+            l3, n3, _, dd = tree.find_nearest(pad)
+            dd = dd or 1.0
+            ax = (fc - cen).normalized() if (fc - cen).length > 1e-6 else Vector()
+            side = (pad - cen).normalized().dot(ax)
+            facing = (n3.dot(ax) if n3 is not None else 0.0)   # -1: on the face opposite the fingers (true opposition)
+            return abs(dd - FRAD["thumb"]) + 0.012 * (1 + side) + 0.02 * (1 + facing) + 25 * pen, pad
+        return (pad - Tpad).length + 25 * pen, pad
+
+    def _digit_reach(self, s, H_arm, tree, finger, target):
+        """Best distance (m, + penetration penalty) the pad of `finger` can get to `target` from this hand pose."""
+        ch = self.ch; Mw = ch.rig.matrix_world
+        loc, nrm, _, _ = tree.find_nearest(target)
+        tpad = (loc + nrm * FRAD[finger]) if loc is not None else target
+        if finger == "thumb":
+            return min(self._thumb_pad(s, H_arm, tree, a, o, c, tpad)[0] for a in (0, .3, .6, .9) for o in (-.2, .2, .6, 1.)
+                       for c in (-.15, .1, .35, .6, .85))
+        best = 9.0
+        for c in [x / 20 for x in range(0, 21)]:
+            pw = [Mw @ p for p in self._finger_points(s, H_arm, ch.finger_quats(s, {finger: c}))[finger]]
+            if not pw:
+                return best
+            pad = pw[-2].lerp(pw[-1], 0.6)
+            pen = 0.0
+            for p in pw[3:]:
+                l2, n2, _, dd = tree.find_nearest(p)
+                if l2 is not None and (p - l2).dot(n2) < 0:
+                    pen = max(pen, dd + FRAD[finger])
+            best = min(best, (pad - tpad).length + 25 * pen)
+        return best
+
+    def _plan_wrap(self, s, q, g, ob):
+        """Power grips: choose where around the object the palm goes and how the hand is rolled so the wrist stays
+        natural for the arm that is coming (cylinders: angle around the axis + finger tilt; round: yaw + tilt)."""
+        tree = P.bvh(ob); up = Vector((0, 0, 1)); c = Vector(g["center"]); tw = self._plan_t
+        best = None
+        if g["type"] == "wrap_side":
+            p0 = Vector(g["palm_point"]); zg = p0.z
+            n0 = Vector(g["palm_n"]); n0.z = 0; n0.normalize()
+            for ang in range(-75, 76, 15):
+                n = Quaternion(up, math.radians(ang)) @ n0          # palm faces the axis from this side
+                hit = tree.ray_cast(Vector((c.x, c.y, zg)) - n * 0.5, n)
+                if hit[0] is None:
+                    continue
+                for tilt in (-50, -35, -20, -5, 10, 25, 40):   # fingers may wrap diagonally, following the forearm
+                    fing = Quaternion(n, math.radians(tilt)) @ n.cross(up).normalized()
+                    for sg in (1, -1):
+                        qq = self.ch.hand_world_rot(s, n, fing * sg)
+                        w = self.ch.wrist_for_palm(s, hit[0], qq)
+                        cost = self._wrist_cost_at(s, tw, w, qq) + 0.15 * abs(ang) / 75 + 0.04 * abs(tilt) / 50
+                        if best is None or cost < best[0]:
+                            best = (cost, hit[0], n, fing * sg, qq)
+        else:
+            f0 = Vector(g["fingers"])
+            for yaw in range(-75, 76, 15):
+                for tilt in (0, 15, 30):
+                    fy = Quaternion(up, math.radians(yaw)) @ f0
+                    pn = (Quaternion(fy.cross(up).normalized(), math.radians(tilt)) @ -up).normalized()
+                    qq = self.ch.hand_world_rot(s, pn, fy)
+                    w = self.ch.wrist_for_palm(s, Vector(g["palm_point"]), qq)
+                    cost = self._wrist_cost_at(s, tw, w, qq) + 0.1 * abs(yaw) / 75
+                    if best is None or cost < best[0]:
+                        best = (cost, Vector(g["palm_point"]), pn, fy, qq)
+        if best is None:
+            return g, q
+        g = dict(g); g["palm_point"], g["palm_n"], g["fingers"] = best[1], best[2], best[3]
+        if g["type"] == "wrap_side":
+            g["approach"] = best[2].copy()
+        return g, best[4]
+
+    def _plan_span(self, s, q, g, ob):
+        """span/pinch: search hand yaw (thumb-to-fingers opposition runs DIAGONALLY across a real hand, ~14 cm max),
+        slide along the span axis and height until BOTH the thumb pad (near face) and the index pad (far face) can
+        touch - a real two-sided pinch, never fingertips resting on top. Returns (wrist, hand rotation)."""
+        ch = self.ch; Mwi = ch.rig.matrix_world.inverted()
+        tree = P.bvh(ob)
+        f0 = Vector(g["fingers"]); up = Vector((0, 0, 1))
+        Ft, Tt = Vector(g["finger_target"]), Vector(g["thumb_target"])
+        loc, nrm, _, _ = tree.find_nearest(Tt)
+        Tpad = (loc + nrm * FRAD["thumb"]) if loc is not None else Tt
+        best = None
+        tside = 1 if s == "R" else -1  # yaw that swings the thumb toward the near face
+        tw = self._plan_t
+        pitches = (0, 20, 40, 60, 72) if g["type"] == "pinch" else ((0, 16, 32, 46) if g.get("dims", Vector((0, 0, 1))).z > 0.05 else (0, 14, 28))
+        cands = []
+        for yaw in (-36, -18, 0, 18, 36, 54):
+            for pitch in pitches:
+                fy = Quaternion(up, math.radians(yaw) * tside) @ f0
+                Rq = Quaternion(fy.cross(up).normalized(), -math.radians(pitch)) @ Quaternion(up, math.radians(yaw) * tside)
+                qy = Rq @ q
+                gy = dict(g); gy["fingers"] = Rq @ f0
+                base = self._anchor_wrist(s, qy, gy)
+                cands.append((self._wrist_cost_at(s, tw, base, qy), yaw, qy, base))
+        cands.sort(key=lambda c: c[0])
+        for wc, yaw, qy, base in cands[:10]:   # the 10 most wrist-friendly hand angles get the full two-sided contact test
+            if wc > 2.5:
+                continue  # this hand angle would break the wrist - a person never grabs like that
+            Q4 = qy.to_matrix().to_4x4()
+            for df in (-0.05, -0.035, -0.02, -0.01, 0.0, 0.015):
+                for dz in ((-0.01, 0.0, 0.015, 0.03) if g["type"] == "span" else (0.0, 0.02, 0.04, 0.06)):
+                    w = base + f0 * df + up * dz
+                    Hw = Matrix.Translation(w) @ Q4
+                    pc = Hw @ ch.hand[s]["palm_center_l"]
+                    l2, n2, _, dd = tree.find_nearest(pc)
+                    if l2 is not None and ((pc - l2).dot(n2) < 0 or dd < ch.hand[s]["palm_thick"]):
+                        continue
+                    if g["type"] == "pinch" and pc.z < g.get("top", pc.z) + 0.045:
+                        continue  # tiny/thin things are pinched from above with the fingertips, never a flat hand
+                    H_arm = Mwi @ Hw
+                    di = self._digit_reach(s, H_arm, tree, "index", Ft)
+                    if di > 0.02:
+                        continue
+                    dt = min(self._thumb_pad(s, H_arm, tree, a, o, c, Tpad)[0]
+                             for a in (0.0, 0.5, 1.0) for o in (-0.4, 0.2, 0.8) for c in (0.0, 0.3, 0.6))
+                    if self._finger_intrusion(s, Hw, tree) > 0.005:
+                        continue  # resting fingers would already be inside the object
+                    cost = di + dt + 0.04 * abs(df) + 0.02 * abs(dz) + 0.004 * abs(yaw) / 12 + 0.005 * self._wrist_cost_at(s, tw, w, qy)
+                    if best is None or cost < best[0]:
+                        best = (cost, w, qy, di, dt, yaw)
+        if best is None:
+            return self._anchor_wrist(s, q, g), q
+        return best[1], best[2]
 
     def _reach_posture(self, s, t, wrist):
         """Smallest torso lean (then knee bend) that brings the wrist within comfortable arm reach."""
@@ -523,7 +708,7 @@ class Performer:
         wl = Mi @ Vector(wrist)
         sh0 = ch.arm_head(f"upperarm.{s}")
         cb = ch.b.get(f"shoulder.{s}") or ch.spine[-1]
-        lim = ch.arm_len * 0.92
+        lim = ch.arm_len * 0.86   # people lean/bend before the arm is straight: bent elbow = natural wrist
         for crouch in (0.0, 0.08, 0.16, 0.24, 0.32):
             for deg in range(0, 72, 3):
                 shp = self.posed_point(self.chain_deltas(math.radians(deg)), cb, sh0, crouch)
@@ -543,6 +728,7 @@ class Performer:
         self.hw[s].key(t0, pend["pre"], "hold").key(t1, wg, "out")
         tc = t1 + 0.16
         self.spread[s].key(t1, self.spread[s].at(t1), "hold").key(tc, 0.0, "smooth")  # fingers draw together to grip
+        self._exact(s, t1 - 0.1, tc + 0.12)
         self.events.append({"type": "grip", "side": s, "prop": prop, "t_open": t1, "t_close": tc,
                             "grip": pend["grip"], "wrist": wg, "rot": q})
         self.events.append({"type": "attach", "side": s, "prop": prop, "t": tc})
@@ -560,15 +746,37 @@ class Performer:
         ob = self.props[g["prop"]]
         q, w = g["rot"], g["wrist"]
         inv = q.inverted()
-        best, bd = None, -1e9
-        fing_l = self.ch.hand[s]["fing_l"]
-        for v in ob.data.vertices[:: max(1, len(ob.data.vertices) // 400)]:
-            pw = ob.matrix_world @ v.co
-            pl = inv @ (pw - w)
-            score = pl.dot(fing_l) + 0.3 * pl.length
-            if score > bd:
-                bd, best = score, pl
-        return best
+        gp = g["grip"]
+        cps = [inv @ (Vector(gp[k]) - w) for k in ("finger_target", "thumb_target", "palm_point") if gp.get(k) is not None]
+        return self._free_point([inv @ (ob.matrix_world @ v.co - w) for v in list(ob.data.vertices)[:: max(1, len(ob.data.vertices) // 400)]],
+                                cps, self.ch.hand[s]["fing_l"])
+
+    @staticmethod
+    def _free_point(pts, contacts, fing_l):
+        """Point of the held object farthest from the fingers/thumb/palm (that is where the mouth goes)."""
+        if not contacts:
+            return max(pts, key=lambda p: p.dot(fing_l) + 0.3 * p.length)
+        return max(pts, key=lambda p: min((p - c).length for c in contacts) + 0.3 * p.dot(fing_l))
+
+    def _mouth_rot_natural(self, s, t, bl, pl, f, inward, grip_type, contact):
+        """Like _mouth_rot, but the free roll around the bite direction (and +-20 deg of tilt) is chosen so the
+        wrist stays natural with the arm that brings it up."""
+        q0 = self._mouth_rot(bl, pl, f, inward, grip_type)
+        up = Vector((0, 0, 1)); base_dir = (-f + up * (0.12 if grip_type == "span" else 0.22)).normalized()
+        best = None
+        for tilt_ax in (None, up.cross(f).normalized(), up):
+            for tilt in ((0,) if tilt_ax is None else (-35, -18, 18, 35)):
+                d = base_dir if tilt_ax is None else (Quaternion(tilt_ax, math.radians(tilt)) @ base_dir)
+                align = (q0 @ bl).normalized().rotation_difference(d)
+                for k in range(0, 24):
+                    qq = Quaternion(d, math.radians(15 * k)) @ align @ q0
+                    w = contact - qq @ bl
+                    pal = qq @ pl
+                    pref = 0.08 * (1 - pal.dot((-up * 0.85 + inward * 0.35).normalized() if grip_type == "span" else (up * 0.6 + inward * 0.8).normalized()))
+                    cost = self._wrist_cost_at(s, t, w, qq) + pref + (0.05 if tilt_ax is not None else 0.0)
+                    if best is None or cost < best[0]:
+                        best = (cost, qq)
+        return best[1]
 
     @staticmethod
     def _mouth_rot(bl, pl, f, inward, grip_type):
@@ -596,10 +804,12 @@ class Performer:
             qm = Quaternion()
             # orient: bite direction points back toward the face; palm faces up/inward
             from .rigkit import _basis
-            qm = self._mouth_rot(bl, pl, f, inward, g.get("grip", {}).get("type"))
             tm = t0 + T
+            self.lean.key(t0, self.lean.at(t0), "hold").key(tm, 0.06, "mj")      # posture first: the mouth is planned on it
+            self.crouch.key(t0, self.crouch.at(t0), "hold").key(tm, 0.0, "mj")
             mouth = self.mouth_world(tm)
             contact = mouth + f * 0.006
+            qm = self._mouth_rot_natural(s, tm, bl, pl, f, inward, g.get("grip", {}).get("type"), contact)
             w_contact = contact - qm @ bl
             w_pre = w_contact + f * 0.03 - up * 0.01
             self.hw[s].key(t0, self.hw[s].at(t0), "hold").key(tm, w_pre, "mj")
@@ -609,8 +819,6 @@ class Performer:
             ahead = self.mouth_world(t0) + f * 1.5
             self.look.key(t0, self.look.at(t0), "hold").key(t0 + 0.4, ahead, "mj")
             self.gaze.key(t0 + 0.05, self.gaze.at(t0), "hold").key(t0 + 0.2, mouth + f * 0.2 - up * 0.05, "smooth")
-            self.lean.key(t0, self.lean.at(t0), "hold").key(tm, 0.06, "mj")
-            self.crouch.key(t0, self.crouch.at(t0), "hold").key(tm, 0.0, "mj")
             return tm
         # show / chest / point: stand up while bringing it up
         self.lean.key(t0, self.lean.at(t0), "hold").key(t0 + T, 0.0, "mj")
@@ -628,18 +836,73 @@ class Performer:
             self._look_to(t0 + 0.1, p)
         return t0 + T
 
+    def v_drink(self, t0, a):
+        """Held cup/can/bottle: rim to the lower lip, tilt toward the face, sip (head tips back), lower again."""
+        s = (a.get("hand") or ("R" if self.holding["R"] else "L"))[0].upper()
+        g = self._held(s)
+        if not g:
+            log("drink: nothing held"); return t0
+        ob = self.props[g["prop"]]
+        T, sip = float(a.get("lift", 0.75)), float(a.get("dur", 1.1))
+        tilt = math.radians(float(a.get("tilt", 38)))
+        f = self.fwd(t0); up = Vector((0, 0, 1)); lat = f.cross(up).normalized()
+        q_hold, w_hold = g["rot"], g["wrist"]
+        inv = q_hold.inverted()
+        mn, mx = core.world_bbox(ob)
+        rim = [inv @ (ob.matrix_world @ v.co - w_hold) for v in ob.data.vertices if (ob.matrix_world @ v.co).z > mx.z - 0.006]
+        if not rim:
+            return t0
+        t1 = t0 + T; t2 = t1 + sip
+        cen0 = (mn + mx) / 2
+        best_psi = (1e9, 0.0)
+        for psi in range(-75, 76, 15):   # spin the cup about its own vertical axis (hand goes round with it)
+            Rs = Quaternion(up, math.radians(psi))
+            qd = Quaternion(lat, tilt) @ Rs @ q_hold
+            rp = max(rim, key=lambda p: (qd @ p).dot(-f))
+            wt = self.mouth_world(t1) - up * 0.011 - qd @ rp
+            cst = self._wrist_cost_at(s, t1, wt, qd) + 0.002 * abs(psi) / 15
+            if cst < best_psi[0]:
+                best_psi = (cst, psi)
+        q_hold = Quaternion(up, math.radians(best_psi[1])) @ q_hold
+        self.lean.key(t0, self.lean.at(t0), "hold").key(t1, 0.04, "mj")
+        self.crouch.key(t0, self.crouch.at(t0), "hold").key(t1, 0.0, "mj")
+        out = []
+        for k, ang in ((t1, tilt), (t1 + sip * 0.5, tilt + math.radians(14)), (t2, tilt)):
+            qd = Quaternion(lat, ang) @ q_hold
+            rp = max(rim, key=lambda p: (qd @ p).dot(-f))          # rim point nearest the face
+            lip = self.mouth_world(k) - up * 0.011 + f * (self.ch.lip_front * 0.6)
+            out.append((k, lip - qd @ rp, qd))
+        self.hw[s].key(t0, self.hw[s].at(t0), "hold"); self.hq[s].key(t0, self.hq[s].at(t0), "hold")
+        self.ha[s].key(t0, Vector(), "hold").key(t0 + T * 0.5, Vector((0, 0, 0.03)), "smooth").key(t1, Vector(), "smooth")
+        (ka, wa, qa), (kb, wb, qb), (kc, wc, qc) = out
+        self.hw[s].key(ka, wa + f * 0.02, "mj").key(ka + 0.15, wa, "smooth").key(kb, wb, "smooth").key(kc, wc, "smooth")
+        self.hq[s].key(ka, qa, "mj").key(ka + 0.15, qa, "smooth").key(kb, qb, "smooth").key(kc, qc, "smooth")
+        self._exact(s, ka - 0.1, kc + 0.05)
+        self.events.append({"type": "drink", "side": s, "prop": g["prop"], "psi": best_psi[1],
+                            "keys": [(ka, tilt, 0.02), (ka + 0.15, tilt, 0.0), (kb, tilt + math.radians(14), 0.0), (kc, tilt, 0.0)]})
+        self.nod.key(t1, self.nod.at(t1), "hold").key(t1 + 0.3, -math.radians(9), "smooth").key(t2, -math.radians(6), "hold").key(t2 + 0.4, 0.0, "smooth")
+        self.face.keys({"mouthFunnel": 0.35, "jawOpen": 0.08, "mouthPucker": 0.2}, t1 - 0.1, t2, 0.2, 0.2)
+        self.face.keys({"eyeBlinkLeft": 0.55, "eyeBlinkRight": 0.55}, t1 + 0.2, t2 - 0.1, 0.25, 0.2)
+        self.face.swallow(t2 + 0.1)
+        self._look_ahead(t0)
+        down = self.shoulder_world(t2 + 0.7, s) + f * 0.3 - up * 0.22    # cup lowered in front of the chest
+        self.hw[s].key(t2 + 0.7, down, "mj")
+        self.hq[s].key(t2 + 0.7, q_hold, "mj")
+        return t2 + 0.7
+
     def v_bite(self, t0, a):
         mp = getattr(self, "_mouth_plan", None)
         if not mp:
             t0 = self.v_lift(t0, {"to": "mouth", "hand": a.get("hand")}); mp = self._mouth_plan
         s = mp["side"]; f = self.fwd(t0); up = Vector((0, 0, 1))
         tc = t0 + 0.32
+        self._exact(s, mp.get("t_pre", t0) - 0.05, tc + 0.6)
         self.hw[s].key(t0 + 0.08, self.hw[s].at(t0 + 0.08), "hold").key(tc, mp["w_contact"], "out")
         self.nod.key(t0, self.nod.at(t0), "hold").key(tc, math.radians(5), "smooth").key(tc + 0.35, 0.0, "smooth")
         self.face.bite(tc)
         self.face.no_blink.append((t0, tc + 0.2))
         self.events.append({"type": "bite", "side": s, "prop": self.holding[s], "t": tc + 0.09, "t_contact": tc,
-                            "t_pre": mp.get("t_pre"), "t_hold": tc + 0.12, "t_away": tc + 0.6})
+                            "t_pre": mp.get("t_pre"), "t_pre2": t0 + 0.08, "t_hold": tc + 0.12, "t_away": tc + 0.6})
         away = mp["w_contact"] + f * 0.14 - up * 0.16   # food comes down to chest height while chewing
         self._look_ahead(tc + 0.25)                       # eyes leave the food once it is in the mouth
         self.hw[s].key(tc + 0.12, mp["w_contact"], "hold").key(tc + 0.6, away, "mj")
@@ -665,7 +928,7 @@ class Performer:
         prop = self.holding[s]; ob = self.props[prop]
         sup = self.props.get(a.get("on")) or bpy.data.objects.get(a.get("on", ""))
         g = self._held(s)
-        xy = a.get("at")
+        xy = a.get("xy") or (a.get("at") if isinstance(a.get("at"), (list, tuple)) else None)
         mn, mx = core.world_bbox(sup)
         tx, ty = (xy[0], xy[1]) if xy else ((mn.x + mx.x) / 2, (mn.y + mx.y) / 2)
         z = P.top_z(sup, tx, ty)
@@ -677,12 +940,20 @@ class Performer:
         self.hw[s].key(t0, self.hw[s].at(t0), "hold").key(t0 + T, w, "mj")
         self.hq[s].key(t0, self.hq[s].at(t0), "hold").key(t0 + T, g["rot"], "mj")
         self._look_to(t0, Vector((tx, ty, z)))
-        return self.v_release(t0 + T, {"hand": s})
+        lean, crouch = self._reach_posture(s, t0 + T, w)   # lean/bend to put it down, like reaching for it
+        self._exact(s, t0 + T - 0.3, t0 + T + 0.1)
+        self.lean.key(t0, self.lean.at(t0), "hold").key(t0 + T, lean, "mj")
+        self.crouch.key(t0, self.crouch.at(t0), "hold").key(t0 + T, crouch, "mj")
+        t_end = self.v_release(t0 + T, {"hand": s, "on": a.get("on")})
+        self.lean.key(t0 + T + 0.15, lean, "hold").key(t_end + 0.3, 0.0, "mj")
+        self.crouch.key(t0 + T + 0.15, crouch, "hold").key(t_end + 0.3, 0.0, "mj")
+        return t_end
 
     def v_release(self, t0, a):
         s = (a.get("hand") or ("R" if self.holding["R"] else "L"))[0].upper()
         if self.holding[s]:
-            self.events.append({"type": "detach", "side": s, "prop": self.holding[s], "t": t0 + 0.05, "drop": a.get("drop", False)})
+            self.events.append({"type": "detach", "side": s, "prop": self.holding[s], "t": t0 + 0.05, "drop": a.get("drop", False),
+                                "on": a.get("on")})
         self.holding[s] = None
         for f, c in OPEN.items():
             self.curl[s][f].key(t0, self.curl[s][f].at(t0), "hold").key(t0 + 0.2, c + 0.05, "smooth")
@@ -973,9 +1244,10 @@ class Performer:
                 w, hq = self.hand_target(s, t)
                 kw.put(ch.ctrl[f"hand.{s}"], "location", f, w)
                 kw.put(ch.ctrl[f"hand.{s}"], "rotation_quaternion", f, hq)
-                kw.put(ch.ctrl[f"pole_arm.{s}"], "location", f, self._elbow_pole(s, t, w))
+                kw.put(ch.ctrl[f"pole_arm.{s}"], "location", f, self._elbow_pole(s, t, w, hq))
             look = self.look.at(t)
             gz = self.gaze.at(t) + Vector((self.noise(t * 1.7 + 40) * 0.012, 0, self.noise(t * 1.3 + 80) * 0.008)) * (look - M.translation).length
+            look = self._clamp_look(t, look)
             gz = self._clamp_gaze(t, gz, look)
             kw.put(ch.ctrl["look"], "location", f, look)
             kw.put(ch.ctrl["gaze"], "location", f, gz)
@@ -986,6 +1258,30 @@ class Performer:
                 for (skd, kname) in ch.face.get(k, []):
                     kw.put(skd, f'key_blocks["{kname}"].value', f, v)
         self._bake_fingers(kw, frames)
+
+    NECK = {"yaw": 75, "up": 38, "down": 50}   # head+neck range relative to the chest (deg)
+
+    def _clamp_look(self, t, look):
+        D = self.deltas_at(t)
+        top = self.ch.spine[-1] if self.ch.spine else self.ch.b["hips"]
+        cq = self.M(t).to_quaternion() @ D.get(top, Quaternion())
+        cf = cq @ Vector((0, -1, 0)); cf.z = 0
+        if cf.length < 1e-6:
+            return look
+        cf.normalize()
+        base = self.head_point(t, self.ch.eye_mid)
+        d = look - base; dist = d.length
+        if dist < 1e-6:
+            return look
+        dn = d / dist; side = cf.cross(Vector((0, 0, 1))).normalized(); up = Vector((0, 0, 1))
+        x, y, z = dn.dot(cf), dn.dot(side), dn.dot(up)
+        yaw, pit = math.atan2(y, x), math.atan2(z, math.hypot(x, y))
+        N = self.NECK
+        yc = clamp(yaw, -math.radians(N["yaw"]), math.radians(N["yaw"])); pc = clamp(pit, -math.radians(N["down"]), math.radians(N["up"]))
+        if abs(yc - yaw) < 1e-4 and abs(pc - pit) < 1e-4:
+            return look
+        nd = cf * (math.cos(pc) * math.cos(yc)) + side * (math.cos(pc) * math.sin(yc)) + up * math.sin(pc)
+        return base + nd * dist
 
     EYE = {"yaw": 26, "up": 14, "down": 20, "near": 0.35}  # deg from where the head points; min focus distance (m)
 
@@ -1016,7 +1312,88 @@ class Performer:
     def _spine_top(self, t):
         return Quaternion((1, 0, 0), self.lean.at(t) + self.back.at(t)) @ Quaternion((0, 0, 1), self.twist.at(t))
 
-    def _elbow_pole(self, s, t, wrist):
+    def _elbow_pole(self, s, t, wrist, q=None):
+        """IK pole for the elbow. With the hand rotation q known, the elbow is swung around the shoulder-wrist
+        axis to where the WRIST bends least (real people turn the elbow out/in instead of breaking the wrist)."""
+        pole = self._elbow_pole_base(s, t, wrist)
+        return pole if q is None else self._swivel(s, t, wrist, q, pole)
+
+    def _wrist_angles(self, s, f, q):
+        """(flex, deviation, twist) of hand rotation q relative to forearm direction f (radians)."""
+        h = self.ch.hand[s]
+        fing = (q @ h["fing_l"]).normalized(); palm = (q @ h["palm_l"]).normalized()
+        pal = palm - palm.project(f)
+        if pal.length < 1e-6:
+            return 0.0, 0.0, pal
+        pal.normalize(); lat = f.cross(pal)
+        x, y, z = fing.dot(f), fing.dot(pal), fing.dot(lat)
+        return math.atan2(y, x), math.atan2(z, math.hypot(x, y)), pal
+
+    def _wrist_cost_at(self, s, t, w, q):
+        """How unnatural the wrist would be for hand pose (w, q) at time t, elbow swivel chosen at best
+        (0 = relaxed; grows fast beyond the anatomical range). Used to choose grip, hold and mouth orientations."""
+        L1, L2 = self.L_ua[s], self.L_fa[s]
+        S = self.shoulder_world(t, s)
+        d = w - S; dist = min(max(d.length, 1e-4), (L1 + L2) * 0.999); dn = d.normalized()
+        a_ = (L1 * L1 - L2 * L2 + dist * dist) / (2 * dist); hh = math.sqrt(max(0.0, L1 * L1 - a_ * a_))
+        C = S + dn * a_
+        u = self._elbow_pole_base(s, t, w) - S; u -= u.project(dn)
+        if u.length < 1e-6:
+            u = Vector((0, 0, -1)) - Vector((0, 0, -1)).project(dn)
+        u.normalize(); v = dn.cross(u)
+        Wl = self.WRIST; rad = math.radians
+        best = 1e9
+        for k in range(-6, 7):
+            th = math.radians(12 * k)
+            E = C + (u * math.cos(th) + v * math.sin(th)) * hh
+            f = (w - E).normalized()
+            fl, dv, _ = self._wrist_angles(s, f, q)
+            c = 0.3 * (fl / rad(55)) ** 2 + 0.3 * (dv / rad(22)) ** 2 + 0.25 * (th / 1.3) ** 2
+            c += 40 * (max(0.0, fl - rad(Wl["flex"])) + max(0.0, -fl - rad(Wl["ext"])) + max(0.0, abs(dv) - rad(Wl["dev"]))) ** 2
+            best = min(best, c)
+        return best + (2.0 if (w - S).length > (L1 + L2) * 0.97 else 0.0)
+
+    def _swivel(self, s, t, W, q, pole0):
+        L1, L2 = self.L_ua[s], self.L_fa[s]
+        S = self.shoulder_world(t, s)
+        d = W - S; dist = min(max(d.length, 1e-4), (L1 + L2) * 0.999); dn = d.normalized()
+        a_ = (L1 * L1 - L2 * L2 + dist * dist) / (2 * dist); hh = math.sqrt(max(0.0, L1 * L1 - a_ * a_))
+        if hh < 0.02:
+            return pole0  # arm (almost) straight: swivel does not change the wrist
+        C = S + dn * a_
+        u = pole0 - S; u -= u.project(dn)
+        if u.length < 1e-6:
+            return pole0
+        u.normalize(); v = dn.cross(u)
+        Wl = self.WRIST; rad = math.radians
+        up = Vector((0, 0, 1)); mid_x = self.M(t).translation
+        def cost(th):
+            E = C + (u * math.cos(th) + v * math.sin(th)) * hh
+            f = (W - E).normalized()
+            fl, dv, pal = self._wrist_angles(s, f, q)
+            c = 0.25 * (fl / rad(60)) ** 2 + 0.25 * (dv / rad(25)) ** 2
+            c += 40 * (max(0.0, fl - rad(Wl["flex"])) + max(0.0, -fl - rad(Wl["ext"])) + max(0.0, abs(dv) - rad(Wl["dev"]))) ** 2
+            nb = (E - S).cross(W - E)
+            if nb.length > 1e-5 and pal.length > 1e-6:  # forearm twist from the handshake-neutral palm
+                ref = nb.normalized() * (1 if s == "L" else -1)
+                tau = math.atan2(f.dot(ref.cross(pal)), ref.dot(pal))
+                c += 20 * max(0.0, abs(tau) - rad(Wl["twist"])) ** 2
+            c += 6 * max(0.0, E.z - (S.z + 0.04)) ** 2 / 0.01 * (1 - smooth((W.z - S.z + 0.1) / 0.25))  # elbow above shoulder only for raised hands
+            c += 0.35 * (th / 1.3) ** 2                                           # stay near the natural elbow
+            return c
+        ths = [math.radians(6 * k) for k in range(-15, 16)]
+        cs = [cost(th) for th in ths]
+        i = min(range(len(ths)), key=lambda j: cs[j])
+        th = ths[i]
+        if 0 < i < len(ths) - 1:  # parabolic refinement -> smooth from frame to frame
+            c0, c1, c2 = cs[i - 1], cs[i], cs[i + 1]
+            den = c0 - 2 * c1 + c2
+            if den > 1e-9:
+                th += 0.5 * (c0 - c2) / den * math.radians(6)
+        E = C + (u * math.cos(th) + v * math.sin(th)) * hh
+        return E + (E - C).normalized() * 0.35
+
+    def _elbow_pole_base(self, s, t, wrist):
         ch = self.ch; g = 1 if s == "L" else -1
         sh = ch.arm_head(f"upperarm.{s}")
         M = self.M(t)
@@ -1039,7 +1416,7 @@ class Performer:
             for f in frames:
                 t = f / self.fps
                 curls = {k: tr.at(t) for k, tr in self.curl[s].items()}
-                quats = self.ch.finger_quats(s, curls, self.spread[s].at(t))
+                quats = self.ch.finger_quats(s, curls, self.spread[s].at(t), self.topp[s].at(t), self.tabd[s].at(t))
                 wa = self._clip_arm_w(s, t, "fingers") * (1 - self.hs[s].at(t))
                 if wa > 0:
                     C = self.clip_at(t)[1]
@@ -1066,29 +1443,68 @@ class Performer:
             # penetration guard: no finger segment or palm may start inside the prop -> back the hand off
             pn = (Hw.to_3x3() @ self.ch.hand[s]["palm_l"]).normalized()
             total = Vector()
+            precision = ev["grip"]["type"] in ("span", "pinch")
             for _ in range(5):
-                depth = self._penetration(s, Hw, tree)
+                depth = self._penetration(s, Hw, tree, palm_only=precision)
                 if depth < 0.0015:
                     break
                 fix = -pn * (depth + 0.002); total += fix
                 Hw = Matrix.Translation(fix) @ Hw
+            gt = ev["grip"]["type"]
+            if gt in ("wrap_top", "wrap_side"):  # power grip: bring the palm onto the surface (no gap under the hand)
+                pc0 = Hw @ self.ch.hand[s]["palm_center_l"]
+                loc, nrm, _, dist = tree.find_nearest(pc0)
+                want = self.ch.hand[s]["palm_thick"] + 0.004
+                if loc is not None and dist > want + 0.003:
+                    lo, hi = 0.0, min(0.05, dist - want)
+                    for _ in range(10):
+                        mid = (lo + hi) / 2
+                        if self._penetration(s, Matrix.Translation(pn * mid) @ Hw, tree) < 0.0015: lo = mid
+                        else: hi = mid
+                    if lo > 0.002:
+                        total += pn * lo; Hw = Matrix.Translation(pn * lo) @ Hw
+                        log(f"grip {ev['prop']}: palm moved {lo * 1000:.0f} mm onto the surface")
             if total.length > 0:
                 self.hcorr[s].key(ev["t_open"] - 0.2, Vector(), "hold").key(ev["t_open"], total, "smooth")
                 ev["wrist"] = ev["wrist"] + total
-                log(f"grip {ev['prop']}: hand backed off {total.length*1000:.0f} mm to avoid penetration")
                 changed = True
-            solved = self._solve_fingers(s, Hw, tree, ev["grip"]["type"])
-            ev["solved"] = solved
+            solved = self._solve_fingers(s, Hw, tree, gt)
+            opp, abd, tcurl, tgap = self._solve_thumb(s, Hw, tree, ev["grip"], solved)
+            solved["thumb"] = tcurl
+            ev["solved"] = solved; ev["opp"] = opp; ev["abd"] = abd
             t_open, t_close = ev["t_open"], ev["t_close"]
             rel = next((e["t"] for e in self.events if e["type"] == "detach" and e["side"] == s and e["t"] > t_close), None)
+            hold_end = rel if rel else frames[-1] / self.fps + 1
             for fname, c in solved.items():
                 tr = self.curl[s][fname]
-                hold_end = rel if rel else frames[-1] / self.fps + 1
                 tr.keys = [k for k in tr.keys if k[0] <= t_open or k[0] >= hold_end]
                 tr.key(t_close, c, "out")
                 if rel:
                     tr.key(rel - 1e-3, c, "hold")
-            log(f"grip {ev['prop']} ({ev['grip']['type']}, {s}): " + " ".join(f"{k[:2]}={v:.2f}" for k, v in solved.items()))
+            for tr, val in ((self.topp[s], opp), (self.tabd[s], abd)):
+                tr.keys = [k for k in tr.keys if k[0] <= t_open or k[0] >= hold_end]
+                tr.key(t_close, val, "out")
+                if rel:
+                    tr.key(rel - 1e-3, val, "hold").key(rel + 0.35, 0.0, "smooth")
+            # what actually touches -> contact points (bite/drink logic) + stability check
+            Mw = self.ch.rig.matrix_world
+            pts = self._finger_points(s, Mw.inverted() @ Hw, self.ch.finger_quats(s, solved, 0.0, opp, abd))
+            gaps, cpts = {}, []
+            for fname, pl in pts.items():
+                best = min(((tree.find_nearest(Mw @ p)[3] or 1.0) - FRAD[fname], Mw @ p) for p in pl[3:])
+                gaps[fname] = best[0]
+                if best[0] < 0.004: cpts.append(best[1])
+            if gt in ("wrap_top", "wrap_side"):
+                cpts.append(Hw @ self.ch.hand[s]["palm_center_l"])
+            ev["contacts"] = cpts
+            touch = [f for f, gp in gaps.items() if gp < 0.004]
+            fingers_on = [f for f in ("index", "middle", "ring", "pinky") if f in touch]
+            if "thumb" not in touch or not fingers_on:
+                miss = "thumb" if "thumb" not in touch else "fingers"
+                self.qa_notes.append(f"grip {ev['prop']}: {miss} not touching (gap {1000 * (gaps.get('thumb', 0) if miss == 'thumb' else min(gaps.values())):.0f} mm) -> "
+                                     f"would slip; set grip: span|pinch|wrap_top|wrap_side or size_cm")
+            log(f"grip {ev['prop']} ({gt}, {s}): " + " ".join(f"{k[:2]}={v:.2f}" for k, v in solved.items())
+                + f" opp={opp:.2f} abd={abd:.2f} thumb_gap={tgap * 1000:.0f}mm touching={'+'.join(touch) or 'none'}")
         # write updated grips so the attach offset below is measured on the real (solved) hand
         self._rebake_hands(kw, frames); kw.write()
         # exact hand-to-mouth: bite point from the REAL attach offset, mouth from the REAL evaluated head
@@ -1100,8 +1516,9 @@ class Performer:
             Hc = self._hand_world(s)
             O = Hc.inverted() @ ob.matrix_world  # prop in hand space
             fing_l = self.ch.hand[s]["fing_l"]
-            pts = [O @ v.co for v in ob.data.vertices[:: max(1, len(ob.data.vertices) // 500)]]
-            bl = max(pts, key=lambda p: p.dot(fing_l) + 0.3 * p.length)  # far edge = goes into the mouth
+            pts = [O @ v.co for v in list(ob.data.vertices)[:: max(1, len(ob.data.vertices) // 500)]]
+            Hci = Hc.inverted()
+            bl = self._free_point(pts, [Hci @ c for c in g.get("contacts", [])], fing_l)  # free part -> into the mouth
             pl = self.ch.hand[s]["palm_l"]
 
             def mouth_at(t):
@@ -1115,19 +1532,60 @@ class Performer:
             inward = f_c.cross(up).normalized() * sg   # f x up = actor's right; R hand (sg -1) -> toward the midline
             grip = next((e.get("grip", {}) for e in reversed(self.events) if e["type"] == "grip" and e["side"] == s
                          and e["prop"] == ev["prop"]), {})
-            qm = self._mouth_rot(bl, pl, f_c, inward, grip.get("type"))
             contact = m_c + f_c * (self.ch.lip_front - 0.008)
+            qm = self._mouth_rot_natural(s, ev["t_contact"], bl, pl, f_c, inward, grip.get("type"), contact)
+            for _ in range(2):  # wrist inside its range; the bite point still lands exactly on the lips
+                qm = self._wrist_limit(s, ev["t_contact"], contact - qm @ bl, qm)
             w_c = contact - qm @ bl
             m_p, f_p = mouth_at(ev["t_pre"])
             w_p = (m_p + f_p * (self.ch.lip_front + 0.03)) - qm @ bl - up * 0.008
             self.hw[s].set_at(ev["t_pre"], w_p); self.hq[s].set_at(ev["t_pre"], qm)
+            if ev.get("t_pre2"):
+                self.hw[s].set_at(ev["t_pre2"], w_p)
             self.hw[s].set_at(ev["t_contact"], w_c); self.hw[s].set_at(ev["t_hold"], w_c)
             self.hw[s].set_at(ev["t_away"], w_c + f_c * 0.14 - up * 0.16)
             ev["mouth"] = contact
             log(f"bite: exact mouth contact solved (lips {self.ch.lip_front*1000:.0f} mm ahead of mouth joint)")
             changed = True
+        # exact cup-to-lips: rim from the REAL grip, lips from the REAL evaluated head (look constraint included)
+        for ev in [e for e in self.events if e["type"] == "drink"]:
+            s = ev["side"]; g = self._held(s); ob = self.props[ev["prop"]]
+            sc.frame_set(round(g["t_close"] * self.fps))
+            Hc = self._hand_world(s); O = Hc.inverted() @ ob.matrix_world
+            mn, mx = core.world_bbox(ob)
+            rim = [O @ v.co for v in ob.data.vertices if (ob.matrix_world @ v.co).z > mx.z - 0.006]
+            if not rim:
+                continue
+            up = Vector((0, 0, 1)); q_hold = Quaternion(up, math.radians(ev.get("psi", 0.0))) @ Hc.to_quaternion()
+            for tk, ang, back in ev["keys"]:
+                m, fc = self._mouth_eval(tk)
+                qd = Quaternion(fc.cross(up).normalized(), ang) @ q_hold
+                rp = max(rim, key=lambda p: (qd @ p).dot(-fc))
+                lip = m - up * 0.011 + fc * (self.ch.lip_front * 0.55 + back)
+                for _ in range(2):  # anatomical wrist, rim still on the lip
+                    qd = self._wrist_limit(s, tk, lip - qd @ rp, qd)
+                    rp = max(rim, key=lambda p: (qd @ p).dot(-fc))
+                self.hw[s].set_at(tk, lip - qd @ rp); self.hq[s].set_at(tk, qd)
+            log(f"drink {ev['prop']}: rim placed on the lower lip (exact)")
+            changed = True
         if changed or True:
             self._rebake_hands(kw, frames)
+        import os as _os
+        if _os.environ.get("S3D_DEBUG_KEYS"):
+            a_, b_ = (float(x) for x in _os.environ["S3D_DEBUG_KEYS"].split(","))
+            for nm in ("hw", "hs", "hb", "hcorr", "ha"):
+                for sd in "LR":
+                    ks = [(round(k[0], 3), tuple(round(x, 2) for x in k[1]) if hasattr(k[1], "__len__") else round(k[1], 2), k[2])
+                          for k in getattr(self, nm)[sd].keys if a_ <= k[0] <= b_]
+                    if ks:
+                        log(f"KEYS {nm}.{sd}: {ks}")
+
+    def _mouth_eval(self, t):
+        """Real (evaluated) mouth position + facing at time t - includes the look-at constraint on the head."""
+        bpy.context.scene.frame_set(round(t * self.fps))
+        head = self.ch.bone("head"); ph = self.ch.rig.pose.bones[head.name]
+        Mh = self.ch.rig.matrix_world @ ph.matrix @ head.matrix_local.inverted()
+        return Mh @ self.ch.mouth, (Mh.to_3x3() @ self.ch.fwd).normalized()
 
     def _hand_world(self, s):
         pbn = self.ch.rig.pose.bones[self.ch.b[f"hand.{s}"]]
@@ -1152,13 +1610,28 @@ class Performer:
             out[f] = pts
         return out
 
-    def _penetration(self, s, Hw, tree, curls=None):
+    def _finger_intrusion(self, s, Hw, tree):
+        """Deepest intrusion of the relaxed middle/ring/pinky fingers (planning check, thumb excluded)."""
+        ch = self.ch; Mw = ch.rig.matrix_world
+        pts = self._finger_points(s, Mw.inverted() @ Hw, ch.finger_quats(s, {"middle": 0.3, "ring": 0.35, "pinky": 0.4}))
+        deep = 0.0
+        for f in ("middle", "ring", "pinky"):
+            for p in pts.get(f, [])[3:]:
+                pw = Mw @ p
+                loc, nrm, _, dist = tree.find_nearest(pw)
+                if loc is not None and (pw - loc).dot(nrm) < 0:
+                    deep = max(deep, dist)
+        return deep
+
+    def _penetration(self, s, Hw, tree, curls=None, palm_only=False):
         """Deepest intrusion (m) of palm/finger segments into the prop at the given hand pose."""
         ch = self.ch; Mw = ch.rig.matrix_world
-        pts = self._finger_points(s, Mw.inverted() @ Hw, ch.finger_quats(s, curls or OPEN))
         deep = 0.0
         pc = Hw @ ch.hand[s]["palm_center_l"]
-        cand = [(pc, 0.012)] + [(Mw @ p, FRAD[f]) for f, pl in pts.items() for p in pl[2:]]
+        cand = [(pc, 0.012)]
+        if not palm_only:
+            pts = self._finger_points(s, Mw.inverted() @ Hw, ch.finger_quats(s, curls or OPEN))
+            cand += [(Mw @ p, FRAD[f]) for f, pl in pts.items() for p in pl[2:]]
         for pw, rad in cand:
             loc, nrm, _, dist = tree.find_nearest(pw)
             if loc is None:
@@ -1170,14 +1643,15 @@ class Performer:
         return deep
 
     def _solve_fingers(self, s, Hw, tree, gtype):
+        """Close each finger until it touches the prop (no tunnelling: small steps + bisection). Precision grips
+        (span/pinch) close only the working fingers; the others relax and just avoid the object."""
         ch = self.ch; Mw = ch.rig.matrix_world
         H_arm = Mw.inverted() @ Hw
         res = {}
-        maxc = {"pinch": .85, "pinch_edge": .95}.get(gtype, 1.0)
-        for f in acting_fingers():
+        relaxed = {"span": {"ring": .45, "pinky": .55}, "pinch": {"middle": .5, "ring": .6, "pinky": .68}}.get(gtype, {})
+        for f in ("index", "middle", "ring", "pinky"):
             def contact(c):
-                q = ch.finger_quats(s, {f: c})
-                pts = self._finger_points(s, H_arm, q)[f]
+                pts = self._finger_points(s, H_arm, ch.finger_quats(s, {f: c}))[f]
                 for p in pts[3:]:
                     pw = Mw @ p
                     loc, nrm, _, dist = tree.find_nearest(pw)
@@ -1186,19 +1660,16 @@ class Performer:
                     if dist < FRAD[f] or ((pw - loc).dot(nrm) < 0 and dist < 0.03):
                         return True
                 return False
-            if gtype in ("pinch", "pinch_edge") and f in ("ring", "pinky"):
-                res[f] = 0.5 if not contact(0.5) else 0.25; continue
+            maxc = relaxed.get(f, 1.0)
             if contact(0.0):
                 res[f] = 0.0; continue
-            # sweep closed in small steps (no tunnelling through thin props), refine at first contact
-            prev, hit = 0.0, None
-            c = 0.05
+            prev, hit, c = 0.0, None, 0.05
             while c <= maxc + 1e-6:
                 if contact(c):
                     hit = c; break
                 prev = c; c += 0.05
             if hit is None:
-                res[f] = maxc if f != "thumb" else min(maxc, 0.45)
+                res[f] = maxc if f in relaxed else 0.85
                 continue
             lo, hi = prev, hit
             for _ in range(6):
@@ -1208,6 +1679,48 @@ class Performer:
             res[f] = lo
         return res
 
+    def _solve_thumb(self, s, Hw, tree, g, solved):
+        """Opposition: swing + curl the thumb so its pad lands on the far side of the object from the fingers
+        (span/pinch: the planned near-face point; wraps: the antipodal point of the finger contacts).
+        Returns (opposition, curl, gap_m)."""
+        ch = self.ch; Mw = ch.rig.matrix_world; H_arm = Mw.inverted() @ Hw
+        if not ch.b.get(f"thumb3.{s}") or not ch.hand[s].get("opp"):
+            return 0.0, 0.0, 0.3, 1.0
+        if g["type"] in ("span", "pinch") and g.get("thumb_target") is not None:
+            T = Vector(g["thumb_target"])
+        else:
+            pts = self._finger_points(s, H_arm, ch.finger_quats(s, solved))
+            tips = [Mw @ pts[f][-1] for f in ("index", "middle", "ring") if pts.get(f)]
+            cen = Vector(g["center"])
+            d = cen - sum(tips, Vector()) / max(1, len(tips))
+            d = d.normalized() if d.length > 1e-6 else -(Hw.to_3x3() @ ch.hand[s]["fing_l"]).normalized()
+            hit = tree.ray_cast(cen + d * 0.4, -d)
+            T = hit[0] if hit[0] is not None else cen + d * 0.03
+        loc, nrm, _, _ = tree.find_nearest(T)
+        Tpad = (loc + nrm * FRAD["thumb"]) if loc is not None else T
+        opp_ = None
+        if g["type"] != "pinch":  # span + wraps: anywhere on the side facing away from the fingers
+            pts = self._finger_points(s, H_arm, ch.finger_quats(s, solved))
+            tips = [Mw @ pts[f][-1] for f in ("index", "middle", "ring") if pts.get(f)]
+            opp_ = (Vector(g["center"]), sum(tips, Vector()) / max(1, len(tips)))
+        f_ = lambda a, o, c: self._thumb_pad(s, H_arm, tree, a, o, c, Tpad, opp_)[0]
+        best = min((f_(a / 5, o / 5, c / 20), a / 5, o / 5, c / 20) for a in range(0, 6) for o in range(-2, 7) for c in range(-3, 21, 3))
+        v, a, o, c = best; step = 0.08
+        lim = ((0.0, 1.0), (-0.6, 1.0), (-0.15, 1.0))
+        for _ in range(16):
+            moved = False
+            for i in range(3):
+                for sg in (1, -1):
+                    x = [a, o, c]; x[i] = clamp(x[i] + sg * step, *lim[i])
+                    v2 = f_(*x)
+                    if v2 < v - 1e-6:
+                        v, (a, o, c), moved = v2, x, True
+            if not moved:
+                step *= 0.5
+        pad = self._thumb_pad(s, H_arm, tree, a, o, c, Tpad, opp_)[1]
+        gap = (tree.find_nearest(pad)[3] or 1.0) - FRAD["thumb"]
+        return o, a, c, gap
+
     def _rebake_hands(self, kw, frames):
         ch = self.ch
         for f in frames:
@@ -1216,7 +1729,7 @@ class Performer:
                 w, hq = self.hand_target(s, t)
                 kw.put(ch.ctrl[f"hand.{s}"], "location", f, w)
                 kw.put(ch.ctrl[f"hand.{s}"], "rotation_quaternion", f, hq)
-                kw.put(ch.ctrl[f"pole_arm.{s}"], "location", f, self._elbow_pole(s, t, w))
+                kw.put(ch.ctrl[f"pole_arm.{s}"], "location", f, self._elbow_pole(s, t, w, hq))
         self._bake_fingers(kw, frames)
 
     # ------------------------------------------------------------ pass C: attachments + bites
@@ -1226,8 +1739,10 @@ class Performer:
         for ev in self.events:
             if ev["type"] == "attach":
                 det = next((e for e in self.events if e["type"] == "detach" and e["prop"] == ev["prop"] and e["t"] > ev["t"]), None)
-                ivs.append((ev["prop"], ev["side"], round(ev["t"] * self.fps), round(det["t"] * self.fps) if det else frames[-1]))
-        for prop, s, fa, fd in ivs:
+                ivs.append((ev["prop"], ev["side"], round(ev["t"] * self.fps), round(det["t"] * self.fps) if det else frames[-1],
+                            (det or {}).get("on")))
+        for prop, s, fa, fd, on in ivs:
+            settle = 0.0
             ob = self.props[prop]
             ob.rotation_mode = "QUATERNION"
             sc.frame_set(fa)
@@ -1240,8 +1755,15 @@ class Performer:
                     sc.frame_set(f)
                     Mf = self._hand_world(s) @ O
                     last = Mf
+                    if f == fd and on and on in self.props:  # settle: rest exactly on the support after release
+                        vs = list(ob.data.vertices)[:: max(1, len(ob.data.vertices) // 300)]
+                        low = min(vs, key=lambda v: (Mf @ v.co).z); lp = Mf @ low.co
+                        top = P.top_z(self.props[on], lp.x, lp.y)
+                        settle = (top - lp.z) if top is not None and abs(top - lp.z) < 0.06 else 0.0
+                        log(f"place {prop}: lowest point {lp.z:.3f}, support top {top}, settle {settle * 1000:.0f} mm")
                 else:
-                    Mf = last
+                    k = smooth(min(1.0, (f - fd) / 3.0)) if on else 0.0
+                    Mf = Matrix.Translation((0, 0, settle * k)) @ last if on else last
                 loc, rot, _ = Mf.decompose()
                 kw.put(ob, "location", f, loc); kw.put(ob, "rotation_quaternion", f, rot)
             for f in frames:

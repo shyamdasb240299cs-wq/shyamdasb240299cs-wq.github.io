@@ -232,8 +232,38 @@ def proc_coin(name, coll=None):
     return proc_cyl(name, 0.0121, 0.00175, mat("coin", (0.8, 0.6, 0.35, 1), 0.25, metal=1.0), coll, 48, 0.0003)
 
 
+def proc_bottle(name, coll=None):
+    prof = [(0.0, 0.0), (0.034, 0.0), (0.036, 0.004), (0.036, 0.15), (0.03, 0.18), (0.014, 0.205), (0.0135, 0.235),
+            (0.015, 0.237), (0.015, 0.247), (0.0, 0.247)]
+    return proc_lathe(name, prof, mat("bottle_glass", (0.35, 0.55, 0.45, 1), 0.08, transmission=0.6, coat=0.5), coll)
+
+
+def proc_can(name, coll=None):
+    prof = [(0.0, 0.0), (0.026, 0.0), (0.033, 0.008), (0.033, 0.11), (0.027, 0.121), (0.0, 0.121)]
+    return proc_lathe(name, prof, mat("can_alu", (0.75, 0.1, 0.12, 1), 0.3, metal=0.8), coll)
+
+
+def proc_cookie(name, coll=None):
+    return proc_cyl(name, 0.034, 0.009, mat("cookie", (0.62, 0.42, 0.2, 1), 0.85), coll, 40, 0.003)
+
+
+def proc_pen(name, coll=None):
+    ob = proc_cyl(name, 0.0045, 0.14, mat("pen_blue", (0.08, 0.2, 0.7, 1), 0.35), coll, 16, 0.001)
+    ob.data.transform(Matrix.Translation((0, 0, 0.0045)) @ Matrix.Rotation(math.pi / 2, 4, "Y") @ Matrix.Translation((0, 0, -0.07)))
+    return ob
+
+
+def proc_book(name, coll=None):
+    return proc_box(name, 0.155, 0.225, 0.028, mat("book_cover", (0.12, 0.3, 0.45, 1), 0.6), coll, 0.002)
+
+
+def proc_cereal(name, coll=None):
+    return proc_box(name, 0.19, 0.07, 0.28, mat("cereal_box", (0.85, 0.55, 0.15, 1), 0.6), coll, 0.002)
+
+
 PROCS = {"table": proc_table, "plate": proc_plate, "bread_slice": proc_bread_slice, "mug": proc_mug,
-         "phone": proc_phone, "apple": proc_apple, "coin": proc_coin,
+         "phone": proc_phone, "apple": proc_apple, "coin": proc_coin, "bottle": proc_bottle, "can": proc_can,
+         "cookie": proc_cookie, "pen": proc_pen, "book": proc_book, "cereal": proc_cereal,
          "box": lambda n, c=None: proc_box(n, 0.2, 0.15, 0.12, mat("cardboard", (0.55, 0.4, 0.25, 1), 0.8), c)}
 
 
@@ -375,42 +405,133 @@ def place_on(ob, surface, xy=None, yaw=0.0, lift=0.0):
 
 
 # ------------------------------------------------------------------ grips
+GRIP_ALIAS = {"top": "wrap_top", "side": "wrap_side", "pinch_edge": "span", "edge": "span"}
+
+
+def _hframe(ob):
+    """The object's two most horizontal local axes (world unit vectors, z=0) with their extents."""
+    M3 = ob.matrix_world.to_3x3()
+    bb = [Vector(v) for v in ob.bound_box]
+    ax = []
+    for i in range(3):
+        d = M3.col[i].copy(); ext = (max(v[i] for v in bb) - min(v[i] for v in bb)) * d.length
+        ax.append((d.normalized(), ext))
+    ax.sort(key=lambda a: abs(a[0].z))
+    out = []
+    for d, ext in ax[:2]:
+        h = Vector((d.x, d.y, 0))
+        out.append((h.normalized() if h.length > 1e-6 else Vector((1, 0, 0)), ext))
+    return out
+
+
+def _surface(t, start, d, fallback):
+    hit = t.ray_cast(start, d)
+    return hit[0] if hit[0] is not None else fallback
+
+
+def _fit_circle(pts):
+    """Least-squares circle (Kasa fit) through 2D points -> (centre Vector, radius)."""
+    A = Matrix(((0.0,) * 3,) * 3); b = Vector((0.0, 0.0, 0.0))
+    for p in pts:
+        row = Vector((p.x, p.y, 1.0)); z = -(p.x * p.x + p.y * p.y)
+        for i in range(3):
+            for j in range(3):
+                A[i][j] += row[i] * row[j]
+            b[i] += row[i] * z
+    try:
+        D, E, F = A.inverted() @ b
+    except ValueError:
+        return None, 0.0
+    cx, cy = -D / 2, -E / 2
+    return Vector((cx, cy, 0)), math.sqrt(max(0.0, cx * cx + cy * cy - F))
+
+
+def _is_round(t, c, z, r_guess):
+    """Horizontal cross-section at height z is round (cups, bottles, fruit) vs boxy/flat: circle fit through
+    ray hits, a handle or spout (up to 3 outlying hits) allowed."""
+    hits = []
+    for k in range(16):
+        a = 2 * math.pi * k / 16; d = Vector((math.cos(a), math.sin(a), 0))
+        hit = t.ray_cast(Vector((c.x, c.y, z)) + d * (r_guess * 3 + 0.05), -d)
+        if hit[0] is not None:
+            hits.append(Vector((hit[0].x, hit[0].y, 0)))
+    if len(hits) < 10:
+        return False
+    for _ in range(3):
+        cen, R = _fit_circle(hits)
+        if cen is None or R < 1e-4:
+            return False
+        res = [abs((h - cen).length - R) for h in hits]
+        worst = max(range(len(hits)), key=lambda i: res[i])
+        if res[worst] / R < 0.08:
+            return True
+        if len(hits) <= 13:
+            return False
+        hits.pop(worst)
+    cen, R = _fit_circle(hits)
+    return cen is not None and R > 1e-4 and max(abs((h - cen).length - R) for h in hits) / R < 0.08
+
+
 def grip(ob, from_point, kind="auto", side=None):
-    """Plan a hand grip on ob for a hand coming from from_point (world).
-    Returns dict(type, palm_point, palm_n (into object), fingers (dir), approach, width)."""
+    """Plan a stable hand grip with real opposition (thumb against fingers) for a hand coming from from_point.
+    types:  span      flat/boxy, spannable (bread slice, phone, cookie, pen, cereal box): fingertips on the far
+                      face, thumb on the near face, palm above - the object is clamped between them
+            pinch     tiny (coin, grape): thumb tip against index tip at opposite rim points
+            wrap_top  round & low (apple, bun, ball): palm on top, fingers over the far side, thumb near side
+            wrap_side round & tall (mug, can, bottle, glass): palm on the side, fingers around, thumb opposite
+    Returns dict(type, palm_n, fingers, approach, palm_point | finger_target + thumb_target, width, center, dims)."""
     mn, mx = core.world_bbox(ob)
-    dims = mx - mn
-    c = (mn + mx) / 2
-    hmax = max(dims.x, dims.y)
+    dims = mx - mn; c = (mn + mx) / 2
     t = bvh(ob)
     to_obj = (c - Vector(from_point)); to_obj.z = 0
     to_obj = to_obj.normalized() if to_obj.length > 1e-6 else Vector((0, 1, 0))
+    left = Vector((-to_obj.y, to_obj.x, 0))
+    medial = left if side != "L" else -left       # toward the body midline for this hand
+    up = Vector((0, 0, 1))
+    (h1, L1), (h2, L2) = _hframe(ob)
+    hmin, hmax = min(L1, L2), max(L1, L2)
+    zmid = mn.z + dims.z * 0.5
+    kind = GRIP_ALIAS.get(kind, kind)
     if kind == "auto":
-        if dims.z < 0.025 and hmax > 0.05: kind = "pinch_edge"
-        elif max(dims) < 0.045: kind = "pinch"
-        elif dims.z > 1.3 * hmax: kind = "side"
-        else: kind = "top"
-    side_dir = Vector((-to_obj.y, to_obj.x, 0)) * (-1 if side == "L" else 1)  # fingers wrap toward the body midline
-    medial = Quaternion((0, 0, 1), math.radians(12) * (-1 if side == "L" else 1))  # hands angle slightly inward
-    if kind == "top":
-        palm_pt = Vector((c.x, c.y, mx.z)); palm_n = Vector((0, 0, -1)); fingers = medial @ to_obj
-        approach = Vector((0, 0, -1)); width = min(dims.x, dims.y)
-    elif kind == "side":
-        hit = t.ray_cast(Vector((c.x, c.y, c.z)) - to_obj * 1.0, to_obj)
-        palm_pt = hit[0] if hit[0] else c - to_obj * (hmax / 2)
-        palm_n = to_obj.copy(); fingers = Vector((0, 0, -1)).cross(to_obj).cross(to_obj).normalized() * -1
-        fingers = side_dir.copy(); approach = to_obj.copy(); width = hmax
-    elif kind == "pinch_edge":  # flat item: palm hovers above the near edge, fingertips come down onto it
-        hit = t.ray_cast(Vector((c.x, c.y, mx.z - 0.002)) - to_obj * 1.0, to_obj)
-        edge = hit[0] if hit[0] else c - to_obj * (hmax / 2)
-        palm_pt = Vector((edge.x, edge.y, mx.z + 0.03)) + to_obj * 0.03
-        palm_n = (Vector((0, 0, -1)) + to_obj * 0.15).normalized(); fingers = (to_obj + Vector((0, 0, -0.25))).normalized()
-        approach = (Vector((0, 0, -1)) + to_obj * 0.4).normalized(); width = dims.z
-    else:  # pinch (small object, from above)
-        palm_pt = Vector((c.x, c.y, mx.z + 0.035)); palm_n = Vector((0, 0, -1)); fingers = medial @ to_obj
-        approach = Vector((0, 0, -1)); width = max(dims)
-    return {"type": kind, "palm_point": palm_pt, "palm_n": palm_n.normalized(), "fingers": fingers.normalized(),
-            "approach": approach.normalized(), "width": width, "center": c, "dims": dims}
+        rnd = _is_round(t, c, mn.z + dims.z * 0.45, hmax / 2)
+        if max(dims) < 0.035 or (hmin < 0.03 and dims.z < 0.03):   # coin, grape, pen, straw, key
+            kind = "pinch"
+        elif dims.z < 0.045 and hmin <= 0.14:
+            kind = "span"
+        elif rnd and dims.z > 1.0 * hmin:
+            kind = "wrap_side"
+        elif rnd:
+            kind = "wrap_top"
+        elif hmin <= 0.13:
+            kind = "span"
+        else:
+            kind = "wrap_top"
+    g = {"type": kind, "center": c, "dims": dims}
+    if kind in ("span", "pinch"):
+        cands = [(h1, L1), (h2, L2)]
+        if abs(L1 - L2) < 0.2 * max(L1, L2):   # square-ish / round: the axis that faces the hand
+            ax, L = max(cands, key=lambda a: abs(a[0].dot(to_obj)))
+        else:
+            ax, L = min(cands, key=lambda a: a[1])
+        f = ax if ax.dot(to_obj + medial * 0.6) >= 0 else -ax
+        zc = mn.z + dims.z * (0.5 if dims.z < 0.05 else 0.82)   # boxes: grab near the top
+        far = _surface(t, Vector((c.x, c.y, zc)) + f * (L / 2 + 0.06), -f, Vector((c.x, c.y, zc)) + f * L / 2)
+        near = _surface(t, Vector((c.x, c.y, zc)) - f * (L / 2 + 0.06), f, Vector((c.x, c.y, zc)) - f * L / 2)
+        g.update({"palm_n": -up, "fingers": f, "finger_target": far, "thumb_target": near,
+                  "approach": (-up * 0.8 + f * 0.2).normalized(), "width": L, "top": mx.z,
+                  "palm_point": Vector((c.x, c.y, mx.z + 0.03))})
+    elif kind == "wrap_side":
+        zg = mn.z + min(dims.z * 0.45, 0.09)
+        hit = _surface(t, Vector((c.x, c.y, zg)) - to_obj * (hmax + 0.1), to_obj, Vector((c.x, c.y, zg)) - to_obj * hmin / 2)
+        g.update({"palm_n": to_obj.copy(), "fingers": medial.copy(), "palm_point": hit,
+                  "approach": to_obj.copy(), "width": hmin})
+    else:  # wrap_top
+        fing = (Quaternion((0, 0, 1), math.radians(12) * (1 if side != "L" else -1)) @ to_obj).normalized()
+        top = _surface(t, Vector((c.x, c.y, mx.z + 0.1)), -up, Vector((c.x, c.y, mx.z)))
+        g.update({"palm_n": -up, "fingers": fing, "palm_point": top + up * 0.002,
+                  "approach": -up, "width": hmin})
+    g["palm_n"] = g["palm_n"].normalized(); g["fingers"] = g["fingers"].normalized()
+    return g
 
 
 # ------------------------------------------------------------------ bites

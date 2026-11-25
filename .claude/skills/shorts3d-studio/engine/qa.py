@@ -40,6 +40,14 @@ def run(performers, props, shots, frames, step=3):
                 tgt = ch.ctrl[f"hand.{s}"].matrix_world.translation
                 if (hand - tgt).length > 0.025:
                     bad["reach"].append((f, perf, s, (hand - tgt).length))
+                # joint limits actually reached by the evaluated pose (wrist = the joint people notice first)
+                fa_b, hn_b = pb[ch.b[f"forearm.{s}"]], pb[ch.b[f"hand.{s}"]]
+                fdir = (M @ fa_b.tail - M @ fa_b.head).normalized()
+                fl, dv, _ = perf._wrist_angles(s, fdir, (M @ hn_b.matrix).to_quaternion())
+                fl, dv = math.degrees(fl), math.degrees(dv)
+                if fl > 80 or fl < -62 or abs(dv) > 32:
+                    bad.setdefault("joint", []).append((f, perf, s, f"wrist {'flexed' if fl > 0 else 'bent back'} {abs(fl):.0f} deg, deviation {dv:.0f} deg",
+                                                        max(fl - 80, -62 - fl, abs(dv) - 32)))
                 fp = M @ pb[ch.b[f"foot.{s}"]].head
                 if fp.z < 0.035:
                     bad["under"].append((f, perf, s))
@@ -69,7 +77,9 @@ def run(performers, props, shots, frames, step=3):
                     loc, nrm, _, dist = tree.find_nearest(p)
                     if loc is not None and (p - loc).dot(nrm) < 0 and dist > 0.02:
                         bad["body"].append((f, perf, bn, dist, o.name))
-    # props resting: not held -> must touch support (no floating, no sinking)
+    # props resting: not held -> must touch support (no floating, no sinking). Each candidate support is ray-cast
+    # on its own BVH, so a prop sitting flush on a table never measures the table's underside.
+    supports = {n: o for n, o in props.items()} | {o.name: o for o in bpy.data.objects if o.get("s3d_surface")}
     for name, ob in props.items():
         if ob.get("s3d_surface") or name.endswith("__bitten") or ob.get("s3d_free"):
             continue
@@ -78,17 +88,21 @@ def run(performers, props, shots, frames, step=3):
                 continue
             sc.frame_set(f)
             mn, mx = core.world_bbox(ob)
-            dg = bpy.context.evaluated_depsgraph_get()
-            o = Vector(((mn.x + mx.x) / 2, (mn.y + mx.y) / 2, mx.z + 0.3))
-            res, hit = False, None
-            for _ in range(8):  # walk down through the prop itself to the first support surface
-                res, loc, n, i, hit, _m = sc.ray_cast(dg, o, Vector((0, 0, -1)), distance=5.0)
-                if not res or (hit is not ob and not hit.name.startswith(name + "_bite")):
-                    break
-                o = loc - Vector((0, 0, 1e-4))
-            if res and hit is not ob:
-                gap = mn.z - loc.z
-                if abs(gap) > 0.004 and mn.z > 0.01:
+            if mn.z <= 0.01:
+                continue
+            best = None
+            for sn, so in supports.items():
+                if so is ob or sn.startswith(name):
+                    continue
+                t = core.bvh_world(so)
+                for dx, dy in ((0, 0), (0.3, 0.3), (-0.3, -0.3), (0.3, -0.3), (-0.3, 0.3)):
+                    x = (mn.x + mx.x) / 2 + dx * (mx.x - mn.x); y = (mn.y + mx.y) / 2 + dy * (mx.y - mn.y)
+                    hit = t.ray_cast(Vector((x, y, mn.z + 0.02)), Vector((0, 0, -1)), 0.5)
+                    if hit[0] is not None and (best is None or hit[0].z > best):
+                        best = hit[0].z
+            if best is not None:
+                gap = mn.z - best
+                if abs(gap) > 0.004:
                     bad["float"].append((f, name, gap))
     # framing: subject inside safe area of each shot camera
     for sh in shots:
@@ -111,6 +125,12 @@ def run(performers, props, shots, frames, step=3):
     per("body", f"body inside furniture ({', '.join(sorted({b[2] for b in bad['body']}))})", "move actor back (cast.at) or reach from another side")
     per("skate", "foot sliding while planted", "slow walk (speed 0.8) or shorten path")
     per("under", "foot below floor", "check floor height / set z")
+    for hand in "LR":
+        rows = [r for r in bad.get("joint", []) if r[2] == hand]
+        if rows:
+            worst = max(rows, key=lambda r: r[4])
+            issues.append(f"{hand} wrist beyond its natural range @ {_ranges(sorted({r[0] for r in rows}))}: worst {worst[3]} @ f{worst[0]}"
+                          f"  -> move the object closer/higher, use the other hand, or set grip:")
     if bad["float"]:
         issues.append("prop not resting on support: " + ", ".join(f"{n} {g*1000:+.0f}mm" for _, n, g in bad["float"][:4]) + "  -> use on:<surface> placement")
     if bad["frame"]:

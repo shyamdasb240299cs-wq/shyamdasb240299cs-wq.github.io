@@ -48,7 +48,7 @@ def _eval_bbox(meshes):
     for o in meshes:
         ev = o.evaluated_get(dg); me = ev.to_mesh()
         M = o.matrix_world
-        for v in me.vertices[:: max(1, len(me.vertices) // 4000)]:
+        for v in list(me.vertices)[:: max(1, len(me.vertices) // 4000)]:
             p = M @ v.co
             mn = Vector(map(min, mn, p)); mx = Vector(map(max, mx, p))
         ev.to_mesh_clear()
@@ -295,7 +295,8 @@ def tag_parts(meshes):
         n = o.name.lower()
         if o is body:
             o["s3d_part"] = "body"
-        elif any(k in n for k in ("hair", "brow", "lash", "beard")):
+        elif any(k in n for k in ("hair", "brow", "lash", "beard", "opacity")) or any(
+                sl.material and sl.material.get("s3d_kind") == "hair" for sl in o.material_slots):
             o["s3d_part"] = "hair"
         elif any(k in n for k in ("eye", "teeth", "tongue", "cornea")):
             o["s3d_part"] = "eyes"

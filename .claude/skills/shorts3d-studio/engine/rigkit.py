@@ -66,6 +66,57 @@ def map_bones(bones, rig_name="rig"):
     return b, list(reversed(chain))
 
 
+def add_twist_bones(rig, meshes):
+    """Forearm twist bones. Without them the whole forearm twist happens in ONE joint (the wrist) and the skin
+    collapses like a candy wrapper - 'as if there were no bones'. Adds s3d_twist.L/R (mid-forearm -> wrist) and
+    moves the wrist half of the forearm skin weights onto it (smooth ramp). Driven at 50 % of the hand twist."""
+    b, _ = map_bones(rig.data.bones, rig.name)
+    todo = []
+    for s in "LR":
+        fa, hn = b.get(f"forearm.{s}"), b.get(f"hand.{s}")
+        if not fa or not hn or f"s3d_twist.{s}" in rig.data.bones:
+            continue
+        if any("twist" in c.name.lower() for c in rig.data.bones[fa].children):
+            continue  # the rig already has its own twist bones
+        todo.append((s, fa, hn))
+    if not todo:
+        return []
+    vl = bpy.context.view_layer
+    prev = vl.objects.active
+    for o in vl.objects:
+        o.select_set(False)
+    rig.hide_set(False); rig.select_set(True); vl.objects.active = rig
+    bpy.ops.object.mode_set(mode="EDIT")
+    eb = rig.data.edit_bones; made = []
+    for s, fa, hn in todo:
+        F, H = eb[fa], eb[hn]
+        tw = eb.new(f"s3d_twist.{s}")
+        tw.head = F.head.lerp(H.head, 0.5); tw.tail = H.head.copy()
+        tw.align_roll(F.z_axis); tw.parent = F; tw.use_connect = False; tw.use_deform = True
+        made.append((s, fa, F.head.copy(), H.head.copy()))
+    bpy.ops.object.mode_set(mode="OBJECT")
+    for s, fa, E, W in made:
+        d = W - E; L2 = max(1e-9, d.length_squared)
+        for o in meshes:
+            vg = o.vertex_groups.get(fa)
+            if not vg:
+                continue
+            tg = o.vertex_groups.get(f"s3d_twist.{s}") or o.vertex_groups.new(name=f"s3d_twist.{s}")
+            Mi = rig.matrix_world.inverted() @ o.matrix_world
+            gi = vg.index
+            for v in o.data.vertices:
+                w = next((g.weight for g in v.groups if g.group == gi), 0.0)
+                if w <= 0:
+                    continue
+                u = (Mi @ v.co - E).dot(d) / L2
+                k = 0.9 * max(0.0, min(1.0, (u - 0.3) / 0.65)) ** 2 * (3 - 2 * max(0.0, min(1.0, (u - 0.3) / 0.65)))
+                if k > 0:
+                    tg.add([v.index], w * k, "REPLACE"); vg.add([v.index], w * (1 - k), "REPLACE")
+    if prev:
+        vl.objects.active = prev
+    return [m[0] for m in made]
+
+
 def _basis(local_a, world_a, local_b, world_b):
     """Rotation mapping local frame (a, b) onto world frame (a, b)."""
     def frame(a, b):
@@ -222,6 +273,26 @@ class Character:
                                 best = (score, ai, sg)
                     flex[f"{f}{n}"] = (best[1], best[2])
             info["flex"] = flex
+            # thumb opposition: rotation of the thumb root that swings the tip across to face the finger pads
+            t1b, t3b, m1 = self.bone(f"thumb1.{side}"), self.bone(f"thumb3.{side}"), self.bone(f"middle1.{side}")
+            info["opp"] = None
+            if t1b and t3b:
+                head, tip = t1b.head_local, t3b.tail_local
+                target = (m1.head_local if m1 else h.tail_local) + palm * 0.04
+                a, b = (tip - head), (target - head)
+                ax = a.cross(b)
+                if ax.length > 1e-6:
+                    B1 = t1b.matrix_local.to_3x3()
+                    info["opp"] = ((B1.inverted() @ ax).normalized(), min(a.angle(b), math.radians(75)))
+                    # radial abduction: swing in the palm plane, away from the index (wide spans: bread, books)
+                    i1 = self.bone(f"index1.{side}")
+                    ref = i1.head_local if i1 else h.tail_local
+                    axl = (B1.inverted() @ palm).normalized()
+                    def tip_at(sg):
+                        R = B1 @ Quaternion(axl, math.radians(30) * sg).to_matrix() @ B1.inverted()
+                        return head + R @ (tip - head)
+                    sg = 1 if (tip_at(1) - ref).length > (tip_at(-1) - ref).length else -1
+                    info["abd"] = (axl * sg, math.radians(55))
             self.hand[side] = info
         # forward axis of head (for look constraint)
         Hm = hd.matrix_local.to_3x3()
@@ -269,6 +340,13 @@ class Character:
         for side in "LR":
             for chain, tip, mid in (("arm", f"hand.{side}", f"forearm.{side}"), ("leg", f"foot.{side}", f"shin.{side}")):
                 self._calibrate_pole(pb[self.b[mid]].constraints["s3d_ik"], self.b[mid], chain == "leg")
+        for side in "LR":  # forearm twist bones take half of the hand's twist -> the wrist keeps its shape
+            tb = pb.get(f"s3d_twist.{side}")
+            if tb and self.b.get(f"hand.{side}"):
+                cr = tb.constraints.new("COPY_ROTATION"); cr.name = "s3d_twist"
+                cr.target = rig; cr.subtarget = self.b[f"hand.{side}"]
+                cr.use_x = cr.use_z = False; cr.use_y = True
+                cr.target_space = cr.owner_space = "LOCAL"; cr.mix_mode = "REPLACE"; cr.influence = 0.5
         look = core.empty(f"{self.name}_look", rig.matrix_world @ (self.eye_mid + Vector((0, -2.0, 0))), c, 0.06, "SPHERE")
         gaze = core.empty(f"{self.name}_gaze", rig.matrix_world @ (self.eye_mid + Vector((0, -2.0, 0))), c, 0.03, "SPHERE")
         self.ctrl["look"], self.ctrl["gaze"] = look, gaze
@@ -337,8 +415,9 @@ class Character:
         h = self.hand[side]
         return Vector(palm_point) - rot @ h["palm_center_l"] - (rot @ h["palm_l"]) * h["palm_thick"]
 
-    def finger_quats(self, side, curls, spread=0.0):
-        """curls: dict finger->0..1 (1 = fist). Returns {bone_name: Quaternion} local rotations."""
+    def finger_quats(self, side, curls, spread=0.0, opp=0.0, abd=0.0):
+        """curls: dict finger->0..1 (1 = fist); opp: thumb opposition 0 (rest) .. 1 (tip facing the finger pads).
+        Returns {bone_name: Quaternion} local rotations."""
         out = {}
         maxdeg = {1: 70, 2: 95, 3: 70}
         tmax = {1: 25, 2: 45, 3: 60}
@@ -352,6 +431,12 @@ class Character:
                 ang = math.radians((tmax if f == "thumb" else maxdeg)[n]) * c * sg
                 axis = Vector((1, 0, 0)) if ai == 0 else Vector((0, 0, 1))
                 q = Quaternion(axis, ang)
+                if n == 1 and f == "thumb" and opp and self.hand[side].get("opp"):
+                    oax, omax = self.hand[side]["opp"]
+                    q = Quaternion(oax, omax * opp) @ q
+                if n == 1 and f == "thumb" and abd and self.hand[side].get("abd"):
+                    bax, bmax = self.hand[side]["abd"]
+                    q = Quaternion(bax, bmax * abd) @ q
                 if n == 1 and f != "thumb" and spread:
                     other = Vector((0, 0, 1)) if ai == 0 else Vector((1, 0, 0))
                     k = {"index": -1, "middle": -0.3, "ring": 0.4, "pinky": 1}[f]

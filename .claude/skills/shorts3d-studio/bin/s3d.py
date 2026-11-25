@@ -576,8 +576,8 @@ def cmd_plan(a, quiet=False):
         if isinstance(v, (int, float)):
             return shot_row["t0"] + float(v) if shot_row else float(v)
         v = str(v).strip()
-        m = re.match(r"^(S[\w-]+)(\.end)?([+-][\d.]+)?$", v)
-        if m and m.group(1) in sid:
+        m = re.match(r"^([A-Za-z][\w-]*?)(\.end)?([+-][\d.]+)?$", v)
+        if m and m.group(1) in sid:  # any shot id (S03, HOOK, C1 ...)
             r = sid[m.group(1)]; return (r["t1"] if m.group(2) else r["t0"]) + float(m.group(3) or 0)
         m = re.match(r"^w:([\w']+)(?:#(\d+))?([+-][\d.]+)?$", v)
         if m:
@@ -588,6 +588,7 @@ def cmd_plan(a, quiet=False):
         try:
             return float(v)
         except ValueError:
+            print(f"  ! time anchor '{v}' not understood (use 2.5 | S03 | S03+0.4 | S03.end | w:word) - starts at 0")
             return None
     scenes = {}
     for nm, sc in spec.get("scenes", {}).items():
@@ -598,7 +599,11 @@ def cmd_plan(a, quiet=False):
             who, _, verb = key.partition(".")
             args = dict(args or {})
             if "at" in args:
-                args["at_s"] = anchor(args.pop("at"))
+                at = args.pop("at")
+                if isinstance(at, (list, tuple)) and len(at) in (2, 3) and all(isinstance(x, (int, float)) for x in at):
+                    args["xy"] = list(at)          # a position (place: {on: table, at: [x, y]}), not a time
+                else:
+                    args["at_s"] = anchor(at)
             S["script"].append({"who": who, "verb": verb, "args": args})
         for fxi in S.get("fx", []) or []:  # scene fx: time range = start/end anchors (from/to are positions)
             fxi["f0"] = round((anchor(fxi.pop("start", 0.0)) or 0.0) * fps)

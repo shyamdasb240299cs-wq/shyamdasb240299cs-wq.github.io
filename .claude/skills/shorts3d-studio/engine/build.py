@@ -42,7 +42,52 @@ def load_character(key, cs, paths, brand):
     bpy.context.scene.collection.children.link(coll)
     rig = next(o for o in coll.objects if o.type == "ARMATURE")
     rig.name = f"{key}_rig"
+    meshes = [o for o in coll.objects if o.type == "MESH" and any(m.type == "ARMATURE" for m in o.modifiers)]
+    if rigkit.add_twist_bones(rig, meshes):
+        core.log(f"character '{name}': forearm twist bones added (smooth wrist)")
     return rig
+
+
+def grip_closeups(sc, perfs, objs, shots, fps, out):
+    """Every grasp in the rendered shots, seen from the hand's side and from the front, when the fingers close
+    and while held: the contact sheet always shows where fingers, thumb and palm really touch."""
+    span = [(s["f0"], s["f1"]) for s in shots]
+    cd = bpy.data.cameras.new("s3d_grip_cam"); cd.lens = 50
+    cam = bpy.data.objects.new("s3d_grip_cam", cd); sc.collection.objects.link(cam)
+    old_cam, up = sc.camera, Vector((0, 0, 1))
+    marks = [(m, m.camera) for m in sc.timeline_markers if m.camera]
+    for m, _ in marks:  # shot cameras are bound to markers and would override this camera at render time
+        m.camera = None
+    for key, pf in perfs.items():
+        for k, ev in enumerate(e for e in pf.events if e["type"] == "grip"):
+            det = next((e["t"] for e in pf.events if e["type"] == "detach" and e["prop"] == ev["prop"] and e["t"] > ev["t_close"]), None)
+            hold = (det - ev["t_close"]) if det else 2.4
+            times = [ev["t_close"] + 0.08] + ([ev["t_close"] + min(1.2, hold / 2)] if hold > 0.6 else [])
+            for j, t in enumerate(times):
+                f = round(t * fps)
+                if not any(a <= f <= b for a, b in span):
+                    continue
+                sc.frame_set(f)
+                ob = objs.get(ev["prop"])
+                if ob is None:
+                    continue
+                mn, mx = core.world_bbox(ob)
+                hand = pf._hand_world(ev["side"]).translation
+                focus = ((mn + mx) / 2).lerp(hand, 0.35)
+                M = pf.M(t).to_3x3()
+                fwd, right = M @ Vector((0, -1, 0)), M @ Vector((-1, 0, 0))
+                lat = right if ev["side"] == "R" else -right
+                dist = 0.3 + 1.8 * max(mx - mn)
+                for a, d in enumerate(((fwd * 0.9 + lat * 0.45 + up * 0.35).normalized(), (lat * 0.9 + fwd * 0.4 + up * 0.18).normalized())):
+                    cam.location = focus + d * dist
+                    cam.rotation_euler = (focus - cam.location).to_track_quat("-Z", "Y").to_euler()
+                    sc.camera = cam
+                    sc.render.filepath = os.path.join(out, "sheet", f"{f:05d}_grip-{ev['prop']}-{j}{a}.jpg")
+                    bpy.ops.render.render(write_still=True)
+    for m, c in marks:
+        m.camera = c
+    sc.camera = old_cam
+    bpy.data.objects.remove(cam)
 
 
 def resolve_point(spec, objs, chars):
@@ -269,6 +314,8 @@ def main():
     # QA
     issues = qa.run(list(perfs.values()), {k: v for k, v in objs.items() if v.get("s3d_prop")}, shots, frames,
                     step=1 if quality in ("draft", "preview", "final", "cycles") else 3)  # every frame before a real render
+    for pf in perfs.values():
+        issues += getattr(pf, "qa_notes", [])
     json.dump({"scene": scene_name, "issues": issues, "log": core.LOG[-60:]}, open(os.path.join(out, f"qa_{scene_name}.json"), "w"), indent=1)
     for sh in shots:
         sh.pop("_target_fn", None)
@@ -298,6 +345,7 @@ def main():
                 sc.frame_set(f); sc.camera = cams[sh["id"]]
                 sc.render.filepath = os.path.join(out, "sheet", f"{sh['f0']:05d}_{sh['id']}_{k}.jpg")
                 bpy.ops.render.render(write_still=True)
+        grip_closeups(sc, perfs, objs, shots, fps, out)
     else:
         fdir = os.path.join(out, "frames"); os.makedirs(fdir, exist_ok=True)
         step = int(opts.get("step", 1))
