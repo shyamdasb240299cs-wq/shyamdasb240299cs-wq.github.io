@@ -1,0 +1,13 @@
+{
+  "_note": "Signature host (CC0 MakeHuman data). Edit macro sliders 0..1 to design YOUR recurring character once; the engine caches hero.blend.",
+  "macro": {"gender": 1.0, "age": 0.45, "muscle": 0.55, "weight": 0.5, "proportions": 0.8, "height": 0.55,
+            "race": {"caucasian": 0.6, "african": 0.2, "asian": 0.2}},
+  "outfit": {
+    "skin": "skins/young_caucasian_male/young_caucasian_male.mhmat",
+    "eyes": "eyes/high-poly/high-poly.mhclo", "eye_material": "eyes/materials/brown.mhmat",
+    "eyebrows": "eyebrows/eyebrow001/eyebrow001.mhclo", "eyelashes": "eyelashes/eyelashes01/eyelashes01.mhclo",
+    "teeth": "teeth/teeth_base/teeth_base.mhclo", "tongue": "tongue/tongue01/tongue01.mhclo",
+    "hair": "hair/short02/short02.mhclo",
+    "clothes": ["clothes/male_casualsuit06/male_casualsuit06.mhclo", "clothes/shoes01/shoes01.mhclo"]
+  }
+}
