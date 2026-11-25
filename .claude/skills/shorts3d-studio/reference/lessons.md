@@ -19,6 +19,13 @@ still decide in `shots.yaml`. Check here before writing new bpy code - most "new
 | Palm turns outward at every bite | the deferred mouth solve rebuilt the hand rotation with a flipped 'inward' sign | one shared `_mouth_rot()` for planning and the exact solve | - |
 | Bread slice tilted up across the nose | flat food oriented like a burger | flat foods (`pinch_edge`) are bitten level, palm on top, edge into the mouth | thin items: keep `grip: auto` (pinch_edge) |
 | Side-eye / whites of the eyes showing | gaze stayed on a near target after the bite; eyes had no range limit | `_clamp_gaze`: eyes within 26 deg sideways / 14 up / 20 down of the head, focus >= 35 cm; eyes leave the food after the bite | `look_at` the camera-side target after eating |
+| Bread "floats" in the hand | fingers pressed from above only; the thumb (single-axis curl) never opposed them | grip types with opposition; thumb opposition + abduction calibrated per rig; 3-DOF thumb solver; contact check per grasp | read the `grip-*` close-ups on the sheet |
+| Wrist looks boneless / twisted like a candy wrapper | rigs had no forearm twist bones: all twist in one joint | `rigkit.add_twist_bones` on every character (50 % of the hand twist, smooth weight ramp) | - |
+| Wrist bent back 60-170 deg at grasps, bites, sips | hand angle chosen from the object only, arm ignored | elbow swivel optimisation + every grip/hold/mouth angle searched for wrist comfort; exact contacts re-solved with a limited wrist | object within easy reach; other hand for objects on the other side |
+| Hand jumps for one frame before a bite | stale planning key kept after the exact mouth solve | posture keyed before planning; every contact key re-solved | - |
+| Object released in the air after `place` | no lean for the put-down; height planned from stale data | place leans like a reach, settles the object onto the support | `place: {on: table, at: [x, y]}` |
+| Mug treated as a box | bounding-box centre shifted by the handle | circle fit through ray hits (handle ignored) | `grip: wrap_side` to force |
+| Action ignored its `at: C1+0.2` | only shot ids starting with S were anchors | any shot id works; unknown anchors are reported | - |
 | Torn trousers, floating shoes (MakeHuman) | helper geometry had zero weights | nearest-body weight transfer | - |
 | Every face key at full strength (Blender 5.x) | new shape keys default to 1.0 | all keys reset to 0 on import | - |
 | Weak smiles on asset faces | small shape-key amplitudes | `face_gain` measured from the smile key (x1.0-1.6) | `face: {amt: 1.2}` for phone readability |

@@ -17,8 +17,11 @@ bite marks, chewing with closed lips. **Your job is the choices and the timing.*
 - hero.chew: {cycles: 4, expr: yum}
 - hero.swallow: {}
 ```
-**Put it down**: `hero.place: {on: plate}` (exact surface contact, then release + hand returns to rest).
-**Drink**: use a mug/bottle prop → `reach` (grip auto=side) → `grasp` → `lift: {to: mouth}` → `wait: {dur: 0.8}`.
+**Put it down**: `hero.place: {on: plate}` or `{on: table, at: [x, y]}` - leans to reach, releases, the object settles
+exactly onto the surface.
+**Drink**: mug/can/bottle/glass → `reach` → `grasp` → `drink: {dur: 1.1, tilt: 38}` (rim on the lower lip, head tips back,
+eyes half close, swallow, cup lowered) → `place`.
+**Carry**: `lift: {to: chest}` then `walk_to` / `turn_to` - held objects travel with the body.
 **Show the viewer**: `lift: {to: show}` + `face: {expr: excited}` + camera `cu` on `hero.hand_R`.
 **React to a fact**: `face` + one gesture: surprised → `startle`; gross → `face: disgust` + `lean: {deg: -8}`;
 confused → `shrug`; smug → `cross_arms` + `smirk`; pain → `wince` + `crouch: {depth: 0.15}`.
@@ -47,8 +50,19 @@ intensity than film; `cu`/`ecu` shots can stay subtle.
   around it. If QA says "body inside furniture", move `cast.at` or approach from another side.
 - If QA says "hand can't reach", bring the prop closer to the edge or let the actor walk closer; the solver already
   leans up to 60° and crouches up to 32 cm.
-- Grip types: `auto` picks by shape — thin flat items `pinch_edge`, tiny `pinch`, tall `side` (cups/bottles), else
-  `top`. Override when the sheet shows an awkward wrist.
+- Grips (`grip:` on reach; `auto` picks by shape - every grip clamps the object between thumb and fingers):
+  | grip | used for | how it holds |
+  |---|---|---|
+  | `span` | flat or boxy, up to ~13 cm across (bread slice, phone, cookie, book spine, cereal box top) | fingertips on the far edge, thumb on the near edge, hand angled diagonally |
+  | `pinch` | tiny or thin (coin, key, pen, grape) | thumb tip against index tip from above |
+  | `wrap_top` | round and low (apple, bun, ball, orange) | palm on top, fingers around the far side, thumb near side |
+  | `wrap_side` | round and tall (mug, can, bottle, glass) | palm on the side, fingers wrap (diagonally if the arm comes from above) |
+  The hand angle is chosen for a NATURAL WRIST (the planner tries yaw/pitch/roll and the elbow swivel). Every sheet
+  shows close-ups of each grasp (`grip-<prop>-..` stills): thumb and fingers must touch opposite sides.
+- Joints are limited like a real body: wrist 70° flex / 50° back / 22° sideways (twist bones spread the forearm
+  twist), elbow swings out/in to keep the wrist natural, neck 75° turn / 50° down / 38° up, forward bends hinge
+  ~35 % at the hips, thumb and finger ranges anatomical. QA reports `L/R wrist beyond its natural range` with
+  frames - move the object, use the other hand or set `grip:`.
 
 ## Talking characters
 Narration is voice-over (genre default). For on-screen lines: `hero.talk: {text: "No way!", at: "w:way"}` — visemes

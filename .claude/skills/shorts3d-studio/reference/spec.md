@@ -56,13 +56,14 @@ Common args: `at:` anchor · `delay: s` · `with: prev` (start together with the
 | `walk_to` | `target` or `pos: [x,y]`, `stop: reach|near|at|<m>`, `speed: 1.0`, `face` | dist/1.25 m/s + turns; paths around furniture |
 | `turn_to` | `target` | ~0.4 s / 40° with foot steps |
 | `look_at` | `target`, `head: true` | eyes 0.08 s, head 0.45 s |
-| `reach` | `target`, `hand: R|L|auto`, `grip: auto|top|side|pinch|pinch_edge` | 0.55–1.4 s (distance) + lean/crouch solved |
+| `reach` | `target`, `hand: R|L|auto`, `grip: auto|span|pinch|wrap_top|wrap_side` | 0.55–1.4 s (distance) + lean/crouch + natural-wrist hand angle |
 | `grasp` | `prop`, `hand` | 0.45 s; fingers close until they touch (contact solver) |
 | `lift` | `to: mouth|show|chest|[x,y,z]`, `hand`, `dur` | 0.75 s |
 | `bite` | – | 0.8 s: mouth opens before contact, bite mark cut at contact |
 | `chew` | `cycles: 4`, `expr: yum` | 0.62 s/cycle |
 | `swallow` | – | 0.5 s |
-| `place` | `on`, `at: [x,y]`, `hand` | 0.6–1.2 s then release |
+| `place` | `on`, `at: [x,y]` (a position here, not a time), `hand` | 0.6–1.2 s, lean, release, settles on the surface |
+| `drink` | `dur: 1.1`, `tilt: 38`, `hand` | 0.75 s up + sip + 0.7 s down; exact rim-on-lip |
 | `release` | `hand`, `drop: false` | 0.35 s + return to rest |
 | `rest` | `hand: both|R|L` | 0.7 s |
 | `point` | `target`, `hand`, `hold` | 0.45 + hold + 0.5 |

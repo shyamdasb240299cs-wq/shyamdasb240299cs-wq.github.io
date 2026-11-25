@@ -21,7 +21,8 @@ things the spec covers — that is where tokens and realism are lost.
 1. **Load docs on demand** (table below). Do not read engine source unless a feature is truly missing.
 2. **Hook in frame 0**: hands acting on the everyday object, mid-action, narration starts at 0.0 s.
 3. **One visual idea per shot, 1.5–3.5 s per shot**; the planner warns at >4 s → split.
-4. **Look at ONE image per iteration** (`build/sheet.jpg`); fix only flagged shots (`--shots S03,S05`).
+4. **Look at ONE image per iteration** (`build/sheet.jpg`: shot stills + automatic close-ups of every grasp); fix only
+   flagged shots (`--shots S03,S05`).
 5. **Trust QA/inspect text before pixels**: they name frames + the fix.
 6. Realism comes from *direction*: real object scale (`size_cm`), props `on:` surfaces, actor starts where the action
    is, eyes→head→hand order (automatic), a **mocap clip** for explaining/reacting body language, readable faces.
@@ -85,7 +86,7 @@ shots:
     fx: [{type: arrow, from: hero.hand_R, to: bun}]   # xray cutaway arrow label glow glass flow{along} lightning exploded crumbs
     sfx: [{name: whoosh, at: 0}]
 ```
-Verbs: walk_to turn_to look_at reach grasp lift bite chew swallow place release rest point wave thumbs_up shrug
+Verbs: walk_to turn_to look_at reach grasp lift bite chew swallow drink place release rest point wave thumbs_up shrug
 facepalm hands_on_hips cross_arms nod shake_head lean crouch stand startle face talk clip wait · prop verbs: pop move
 spin fall shake hide show. Clips: talk talk2 talk_excited talk_relaxed think agree disagree shrug laugh present
 scratch_head touch_face cheer clap wave look_around waiting yawn. Expressions: happy big_smile delighted yum surprised
@@ -96,7 +97,8 @@ exhausted skeptical relieved excited.
 | Symptom (sheet/QA/inspect) | Fix in spec |
 |---|---|
 | hand can't reach | `walk_to … stop: reach`; move prop nearer the table edge (`at` y toward actor) |
-| finger inside prop / odd grip | `grip: top|side|pinch|pinch_edge` on reach; real `size_cm`; nearer `hand:` |
+| object floats in the hand / odd grip | check the `grip-*` close-ups; `grip: span|pinch|wrap_top|wrap_side`; real `size_cm`; nearer `hand:` |
+| `wrist beyond its natural range` | move the object closer/higher or to that hand's side, or use the other hand |
 | odd wrist / elbow / legs on an imported actor | re-import with `add-character` (fixes bones); see `reference/lessons.md` |
 | body inside furniture | move `cast.at` back / approach from another side |
 | prop floating / sinking | place with `on: <surface>` (never raw z) |
