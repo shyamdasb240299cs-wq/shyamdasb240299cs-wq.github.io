@@ -26,6 +26,8 @@ still decide in `shots.yaml`. Check here before writing new bpy code - most "new
 | Object released in the air after `place` | no lean for the put-down; height planned from stale data | place leans like a reach, settles the object onto the support | `place: {on: table, at: [x, y]}` |
 | Mug treated as a box | bounding-box centre shifted by the handle | circle fit through ray hits (handle ignored) | `grip: wrap_side` to force |
 | Action ignored its `at: C1+0.2` | only shot ids starting with S were anchors | any shot id works; unknown anchors are reported | - |
+| Elbow pops / wrist flips for one frame | two elbow positions equally good -> the solver alternated | swivel hysteresis: stay on the current side unless the other is clearly better | - |
+| Pen/phone picked up with a twisted wrist | the thumb was always put on the same side | span/pinch plans try the thumb on either side and keep the more natural wrist | - |
 | Torn trousers, floating shoes (MakeHuman) | helper geometry had zero weights | nearest-body weight transfer | - |
 | Every face key at full strength (Blender 5.x) | new shape keys default to 1.0 | all keys reset to 0 on import | - |
 | Weak smiles on asset faces | small shape-key amplitudes | `face_gain` measured from the smile key (x1.0-1.6) | `face: {amt: 1.2}` for phone readability |

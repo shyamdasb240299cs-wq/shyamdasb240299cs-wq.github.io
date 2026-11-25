@@ -66,6 +66,7 @@ class Performer:
         self.holding = {"L": None, "R": None}
         self.noise = core.Noise1D(seed)
         self.clip_layers, self._cc, self.clips_dir = [], {}, None
+        self._swv = {}  # last elbow swivel per side (frame-to-frame continuity: no elbow pops)
         self.L_ua = {s: (ch.arm_head(f"forearm.{s}") - ch.arm_head(f"upperarm.{s}")).length for s in "LR"}
         self.L_fa = {s: (ch.arm_head(f"hand.{s}") - ch.arm_head(f"forearm.{s}")).length for s in "LR"}
 
@@ -236,7 +237,7 @@ class Performer:
                 pal.normalize()
                 tau = math.atan2(f.dot(ref.cross(pal)), ref.dot(pal))
                 lim = math.radians(L["twist"])
-                if abs(tau) > lim:
+                if lim < abs(tau) < math.radians(150):  # near +-180 the side is ambiguous: correcting would flip frame to frame
                     q = Quaternion(f, math.copysign(lim, tau) - tau) @ q
         return q
 
@@ -530,7 +531,7 @@ class Performer:
         if g["type"] in ("wrap_top", "wrap_side") and ob:
             g, q = self._plan_wrap(s, q, g, ob)
         if g["type"] in ("span", "pinch") and ob:
-            wg, q = self._plan_span(s, q, g, ob)
+            wg, q, g = self._plan_span(s, q, g, ob)
         else:
             wg = self.ch.wrist_for_palm(s, g["palm_point"], q)
         pre = wg - g["approach"] * 0.075 + Vector((0, 0, 0.015))
@@ -664,16 +665,24 @@ class Performer:
         tw = self._plan_t
         pitches = (0, 20, 40, 60, 72) if g["type"] == "pinch" else ((0, 16, 32, 46) if g.get("dims", Vector((0, 0, 1))).z > 0.05 else (0, 14, 28))
         cands = []
-        for yaw in (-36, -18, 0, 18, 36, 54):
-            for pitch in pitches:
-                fy = Quaternion(up, math.radians(yaw) * tside) @ f0
-                Rq = Quaternion(fy.cross(up).normalized(), -math.radians(pitch)) @ Quaternion(up, math.radians(yaw) * tside)
-                qy = Rq @ q
-                gy = dict(g); gy["fingers"] = Rq @ f0
-                base = self._anchor_wrist(s, qy, gy)
-                cands.append((self._wrist_cost_at(s, tw, base, qy), yaw, qy, base))
+        flip = Quaternion(up, math.pi)
+        for flipped in (False, True):  # thumb may go on either side (the object is clamped either way)
+            fb = -f0 if flipped else f0
+            qb = (flip @ q) if flipped else q
+            gb = dict(g, fingers=fb, finger_target=Tt if flipped else Ft, thumb_target=Ft if flipped else Tt)
+            for yaw in (-36, -18, 0, 18, 36, 54):
+                for pitch in pitches:
+                    fy = Quaternion(up, math.radians(yaw) * tside) @ fb
+                    Rq = Quaternion(fy.cross(up).normalized(), -math.radians(pitch)) @ Quaternion(up, math.radians(yaw) * tside)
+                    qy = Rq @ qb
+                    gy = dict(gb); gy["fingers"] = Rq @ fb
+                    base = self._anchor_wrist(s, qy, gy)
+                    cands.append((self._wrist_cost_at(s, tw, base, qy) + (0.15 if flipped else 0.0), yaw, qy, base, gb))
         cands.sort(key=lambda c: c[0])
-        for wc, yaw, qy, base in cands[:10]:   # the 10 most wrist-friendly hand angles get the full two-sided contact test
+        for wc, yaw, qy, base, gb in cands[:12]:   # the 12 most wrist-friendly hand angles get the full two-sided contact test
+            f0, Ft, Tt = Vector(gb["fingers"]), Vector(gb["finger_target"]), Vector(gb["thumb_target"])
+            loc, nrm, _, _ = tree.find_nearest(Tt)
+            Tpad = (loc + nrm * FRAD["thumb"]) if loc is not None else Tt
             if wc > 2.5:
                 continue  # this hand angle would break the wrist - a person never grabs like that
             Q4 = qy.to_matrix().to_4x4()
@@ -697,10 +706,10 @@ class Performer:
                         continue  # resting fingers would already be inside the object
                     cost = di + dt + 0.04 * abs(df) + 0.02 * abs(dz) + 0.004 * abs(yaw) / 12 + 0.005 * self._wrist_cost_at(s, tw, w, qy)
                     if best is None or cost < best[0]:
-                        best = (cost, w, qy, di, dt, yaw)
+                        best = (cost, w, qy, di, dt, yaw, gb)
         if best is None:
-            return self._anchor_wrist(s, q, g), q
-        return best[1], best[2]
+            return self._anchor_wrist(s, q, g), q, g
+        return best[1], best[2], best[6]
 
     def _reach_posture(self, s, t, wrist):
         """Smallest torso lean (then knee bend) that brings the wrist within comfortable arm reach."""
@@ -1381,15 +1390,24 @@ class Performer:
             c += 6 * max(0.0, E.z - (S.z + 0.04)) ** 2 / 0.01 * (1 - smooth((W.z - S.z + 0.1) / 0.25))  # elbow above shoulder only for raised hands
             c += 0.35 * (th / 1.3) ** 2                                           # stay near the natural elbow
             return c
+        prev = self._swv.get(s)
+        cont = prev is not None and -1e-6 <= t - prev[0] <= 1.5 / self.fps   # same or next frame
         ths = [math.radians(6 * k) for k in range(-15, 16)]
         cs = [cost(th) for th in ths]
         i = min(range(len(ths)), key=lambda j: cs[j])
+        if cont:  # hysteresis: keep the elbow on its current side unless the other side is clearly better
+            near = [j for j in range(len(ths)) if abs(ths[j] - prev[1]) <= math.radians(30)]
+            if near:
+                jl = min(near, key=lambda j: cs[j])
+                if cs[jl] <= cs[i] + 0.25:
+                    i = jl
         th = ths[i]
         if 0 < i < len(ths) - 1:  # parabolic refinement -> smooth from frame to frame
             c0, c1, c2 = cs[i - 1], cs[i], cs[i + 1]
             den = c0 - 2 * c1 + c2
             if den > 1e-9:
                 th += 0.5 * (c0 - c2) / den * math.radians(6)
+        self._swv[s] = (t, th)
         E = C + (u * math.cos(th) + v * math.sin(th)) * hh
         return E + (E - C).normalized() * 0.35
 
@@ -1573,7 +1591,7 @@ class Performer:
         import os as _os
         if _os.environ.get("S3D_DEBUG_KEYS"):
             a_, b_ = (float(x) for x in _os.environ["S3D_DEBUG_KEYS"].split(","))
-            for nm in ("hw", "hs", "hb", "hcorr", "ha"):
+            for nm in ("hw", "hq", "hs", "exact", "hbw"):
                 for sd in "LR":
                     ks = [(round(k[0], 3), tuple(round(x, 2) for x in k[1]) if hasattr(k[1], "__len__") else round(k[1], 2), k[2])
                           for k in getattr(self, nm)[sd].keys if a_ <= k[0] <= b_]
