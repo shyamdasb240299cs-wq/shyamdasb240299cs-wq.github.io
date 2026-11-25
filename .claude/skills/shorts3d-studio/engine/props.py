@@ -375,7 +375,7 @@ def place_on(ob, surface, xy=None, yaw=0.0, lift=0.0):
 
 
 # ------------------------------------------------------------------ grips
-def grip(ob, from_point, kind="auto"):
+def grip(ob, from_point, kind="auto", side=None):
     """Plan a hand grip on ob for a hand coming from from_point (world).
     Returns dict(type, palm_point, palm_n (into object), fingers (dir), approach, width)."""
     mn, mx = core.world_bbox(ob)
@@ -390,9 +390,10 @@ def grip(ob, from_point, kind="auto"):
         elif max(dims) < 0.045: kind = "pinch"
         elif dims.z > 1.3 * hmax: kind = "side"
         else: kind = "top"
-    side_dir = Vector((-to_obj.y, to_obj.x, 0))
+    side_dir = Vector((-to_obj.y, to_obj.x, 0)) * (-1 if side == "L" else 1)  # fingers wrap toward the body midline
+    medial = Quaternion((0, 0, 1), math.radians(12) * (-1 if side == "L" else 1))  # hands angle slightly inward
     if kind == "top":
-        palm_pt = Vector((c.x, c.y, mx.z)); palm_n = Vector((0, 0, -1)); fingers = to_obj.copy()
+        palm_pt = Vector((c.x, c.y, mx.z)); palm_n = Vector((0, 0, -1)); fingers = medial @ to_obj
         approach = Vector((0, 0, -1)); width = min(dims.x, dims.y)
     elif kind == "side":
         hit = t.ray_cast(Vector((c.x, c.y, c.z)) - to_obj * 1.0, to_obj)
@@ -406,7 +407,7 @@ def grip(ob, from_point, kind="auto"):
         palm_n = (Vector((0, 0, -1)) + to_obj * 0.15).normalized(); fingers = (to_obj + Vector((0, 0, -0.25))).normalized()
         approach = (Vector((0, 0, -1)) + to_obj * 0.4).normalized(); width = dims.z
     else:  # pinch (small object, from above)
-        palm_pt = Vector((c.x, c.y, mx.z + 0.035)); palm_n = Vector((0, 0, -1)); fingers = to_obj.copy()
+        palm_pt = Vector((c.x, c.y, mx.z + 0.035)); palm_n = Vector((0, 0, -1)); fingers = medial @ to_obj
         approach = Vector((0, 0, -1)); width = max(dims)
     return {"type": kind, "palm_point": palm_pt, "palm_n": palm_n.normalized(), "fingers": fingers.normalized(),
             "approach": approach.normalized(), "width": width, "center": c, "dims": dims}

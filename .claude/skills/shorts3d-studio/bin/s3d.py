@@ -3,7 +3,11 @@
 
   s3d.py setup                      download CC0 human data + packs, find Blender, make SFX
   s3d.py doctor                     check everything (Blender, ffmpeg, data, TTS)
-  s3d.py new <slug>                 start a video folder from the template
+  s3d.py init [--name N]            make this folder the channel workspace (CHANNEL.md memory, videos/, assets/)
+  s3d.py new <slug>                 start videos/NNN-<slug>/ from a template (logged in CHANNEL.md)
+  s3d.py status [slug]              videos + sizes, or render progress/ETA of one video
+  s3d.py inspect <slug>             check EVERY frame of preview/final.mp4 (pops, flicker, black, frozen)
+  s3d.py finish <slug>              keep deliverables only (final.mp4, shots.yaml, publish.txt, voice), delete the rest
   s3d.py voice <slug>               narration -> audio/vo.wav + words.json
   s3d.py plan <slug>                time every shot/action from the narration -> build/plan.json
   s3d.py build <slug> [--q sheet|blocking|preview|final|cycles] [--shots S01,S02] [--scene X]
@@ -12,6 +16,8 @@
   s3d.py assets <query>             search CC0 Poly Haven models/HDRIs
   s3d.py brand --name N --color #hex [--logo file.png]
   s3d.py add-character <file> --name X [--textures dir]   free rigged human -> library (skeleton+face mapped)
+  s3d.py gpu [--bench]              detect laptop GPU + VRAM tier, render-time estimates
+  s3d.py build ... --resume         continue an interrupted render
 """
 import argparse, json, os, re, sys, subprocess, shutil, glob, math, time, zipfile, urllib.request
 
@@ -41,6 +47,7 @@ def cfg():
     c.setdefault("mh_assets", os.path.join(HOME, "mh", "assets"))
     c.setdefault("chars", os.path.join(HOME, "library", "characters"))
     c.setdefault("brand", os.path.join(HOME, "brand.json"))
+    c.setdefault("clips", os.path.join(HOME, "clips"))
     c.setdefault("tts", {"engine": "kokoro", "voice": "am_michael", "speed": 1.05, "python": sys.executable})
     return c
 
@@ -65,10 +72,25 @@ def load_spec(path):
     return yaml.load(txt, Loader=L)
 
 
+def channel_root(start="."):
+    """Folder holding CHANNEL.md (the channel workspace), searching upward; else the current folder."""
+    d = os.path.abspath(start)
+    while True:
+        if os.path.exists(os.path.join(d, "CHANNEL.md")):
+            return d
+        if os.path.dirname(d) == d:
+            return os.path.abspath(start)
+        d = os.path.dirname(d)
+
+
 def vdir(slug):
-    for cand in (slug, os.path.join("videos", slug)):
-        if os.path.isdir(cand):
+    root = channel_root()
+    for cand in (slug, os.path.join(root, "videos", slug), os.path.join("videos", slug)):
+        if os.path.isdir(cand) and (os.path.exists(os.path.join(cand, "shots.yaml")) or os.path.isdir(os.path.join(cand, "build"))):
             return os.path.abspath(cand)
+    hits = sorted(glob.glob(os.path.join(root, "videos", f"[0-9][0-9][0-9]-{slug}")))
+    if hits:
+        return hits[-1]
     sys.exit(f"no video folder '{slug}' (run: s3d.py new {slug})")
 
 
@@ -170,8 +192,111 @@ def cmd_setup(a):
     s3d_audio.synth_library(os.path.join(HOME, "sfx"))
     if not os.path.exists(c["brand"]):
         cmd_brand(argparse.Namespace(name="My Channel", color="#3EC6E0", accent="#FFD43B", logo=None, font=None))
+    _rocketbox(c, getattr(a, "actors", False))
     print(f"[s3d] setup done. Blender: {b or 'NOT FOUND (set S3D_BLENDER)'}")
     print("  TTS (free, local):  pip install kokoro soundfile && python -m spacy download en_core_web_sm  (+ espeak-ng)")
+
+
+def _rocketbox(c, actors=False):
+    """Real human mocap clips (+ optional realistic actors) from Microsoft Rocketbox (MIT)."""
+    lib = json.load(open(os.path.join(SKILL, "library", "clips", "clips.json")))
+    os.makedirs(c["clips"], exist_ok=True)
+    n = 0
+    for name in lib["clips"]:
+        dst = os.path.join(c["clips"], name + ".max.fbx")
+        if not os.path.exists(dst) and not os.path.exists(os.path.join(c["clips"], name + ".json")):
+            try: _dl(lib["url"].format(name), dst); n += 1
+            except Exception as e: print(f"  clip {name}: {e}")
+    print(f"  mocap clips ready in {c['clips']} ({len(lib['clips'])} curated, {n} new) - {lib['license']}")
+    if not actors:
+        return
+    raw = "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/master/"
+    api = "https://api.github.com/repos/microsoft/Microsoft-Rocketbox/contents/"
+    for name, folder in lib["actors"].items():
+        if os.path.exists(os.path.join(c["chars"], name + ".blend")):
+            continue
+        base = os.path.join(HOME, "downloads", name)
+        stem = os.path.basename(folder)
+        fbx = _dl(raw + f"{folder}/Export/{stem}_facial.fbx", os.path.join(base, "Export", f"{stem}_facial.fbx"))
+        try:
+            req = urllib.request.Request(api + folder + "/Textures", headers={"User-Agent": "shorts3d-studio/1.0"})
+            for it in json.load(urllib.request.urlopen(req, timeout=60)):
+                _dl(it["download_url"], os.path.join(base, "Textures", it["name"]))
+        except Exception as e:
+            print(f"  textures for {name}: {e}")
+        cmd_add_character(argparse.Namespace(file=fbx, name=name, textures=os.path.join(base, "Textures")))
+
+
+TIERS = [  # (min VRAM GB, tier, cycles samples, texture limit, advice)
+    (10, "high", 128, "OFF", "Cycles for every shot is fine"),
+    (6, "mid", 96, "4096", "Cycles final OK; review with EEVEE previews"),
+    (3.5, "low", 64, "2048", "EEVEE final recommended; Cycles only for hero/macro shots (--shots)"),
+    (0, "cpu", 32, "1024", "no usable GPU: EEVEE only (Cycles on CPU is very slow)")]
+
+
+def _vram():
+    """(gpu name, VRAM GB) from the driver tools; 0 if unknown."""
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=20)
+        if r.returncode == 0 and r.stdout.strip():
+            name, mem = r.stdout.strip().splitlines()[0].rsplit(",", 1)
+            return name.strip(), round(float(mem) / 1024, 1)
+    except Exception:
+        pass
+    if sys.platform == "darwin":  # Apple silicon: unified memory, Metal may use ~65 %
+        try:
+            mem = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout) / 2 ** 30
+            return "Apple GPU (unified memory)", round(mem * 0.65, 1)
+        except Exception:
+            pass
+    if os.name == "nt":
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                "Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json"],
+                               capture_output=True, text=True, timeout=30)
+            d = json.loads(r.stdout); d = d if isinstance(d, list) else [d]
+            best = max(d, key=lambda x: x.get("AdapterRAM") or 0)
+            return best["Name"], round((best.get("AdapterRAM") or 0) / 2 ** 30, 1)  # (caps at 4 GB on some drivers)
+        except Exception:
+            pass
+    return "", 0.0
+
+
+def cmd_gpu(a):
+    """Detect the laptop GPU, pick a render tier, optionally benchmark (writes config.json -> every build uses it)."""
+    c = cfg(); bl = find_blender(c)
+    if not bl: sys.exit("Blender not found")
+    out = os.path.join(HOME, "gpu.json")
+    run([bl, "-b", "--factory-startup", "-P", os.path.join(SKILL, "engine", "gpu.py"), "--", out] + (["bench"] if a.bench else []),
+        log=_mk(os.path.join(HOME, "logs", "gpu.log")))
+    info = json.load(open(out)) if os.path.exists(out) else {"backend": "NONE", "devices": []}
+    name, vram = _vram()
+    if info["backend"] == "NONE":
+        vram = 0.0
+    elif vram == 0:
+        vram = 6.0  # GPU present but VRAM unknown: assume a mid laptop GPU
+    tier = next(t for t in TIERS if vram >= t[0])
+    g = {"backend": info["backend"], "devices": info["devices"], "gpu": name or ", ".join(info["devices"]), "vram_gb": vram,
+         "tier": tier[1], "samples": tier[2], "texture_limit": tier[3], "bench": info.get("bench") or c.get("gpu", {}).get("bench")}
+    c["gpu"] = g; save_cfg(c)
+    print(f"[s3d] GPU: {g['gpu'] or 'none'} ({g['backend']}, {vram:g} GB) -> tier '{tier[1]}': {tier[2]} spp, textures {tier[3]} - {tier[4]}")
+    if g["bench"]:
+        b = g["bench"]; n = 30 * 45
+        print(f"  per 1080x1920 frame: EEVEE ~{b['eevee_spf']} s, Cycles ~{b['cycles_spf']} s ({b['cycles_device']})  ->  "
+              f"45 s Short: preview ~{n * b['eevee_spf'] * 0.12 / 60:.0f} min, EEVEE final ~{n * b['eevee_spf'] / 60:.0f} min, "
+              f"Cycles ~{n * b['cycles_spf'] * tier[2] / 96 / 60:.0f} min")
+    else:
+        print("  run 's3d.py gpu --bench' once for render-time estimates")
+
+
+def _eta(c, q, frames):
+    b = (c.get("gpu") or {}).get("bench")
+    if not b or q in ("sheet", "blocking"):
+        return ""
+    spf = {"draft": b["eevee_spf"] * 0.08, "preview": b["eevee_spf"] * 0.12, "final": b["eevee_spf"],
+           "cycles": b["cycles_spf"] * (c["gpu"].get("samples", 96) / 96)}.get(q, b["eevee_spf"])
+    return f"~{frames * spf / 60:.0f} min estimated ({frames} frames)"
 
 
 def cmd_doctor(a):
@@ -199,7 +324,13 @@ def cmd_doctor(a):
 
 
 def cmd_new(a):
-    d = os.path.join("videos", a.slug); os.makedirs(os.path.join(d, "audio"), exist_ok=True)
+    root = channel_root(); vids = os.path.join(root, "videos"); os.makedirs(vids, exist_ok=True)
+    nums = [int(os.path.basename(p)[:3]) for p in glob.glob(os.path.join(vids, "[0-9][0-9][0-9]-*"))]
+    old = glob.glob(os.path.join(vids, f"[0-9][0-9][0-9]-{a.slug}"))
+    d = old[0] if old else os.path.join(vids, f"{(max(nums) + 1 if nums else 1):03d}-{a.slug}")
+    os.makedirs(os.path.join(d, "audio"), exist_ok=True)
+    if not old:
+        _log_video(root, os.path.basename(d), "-", "started")
     src = os.path.join(SKILL, "templates", a.template + ".yaml")
     dst = os.path.join(d, "shots.yaml")
     if not os.path.exists(dst):
@@ -220,6 +351,130 @@ def cmd_add_character(a):
     if "saved character" not in txt:
         sys.exit(f"[s3d] add-character failed (log {log})")
     print(f"  use it in shots.yaml:  cast: {{hero: {{char: {a.name}, at: [x, y], face: <target>}}}}")
+
+
+CHANNEL_MD = """# CHANNEL.md - {name}
+> Claude: at the start of a session read THIS file + the current video's folder only. Never open other videos'
+> folders or old builds; everything needed for consistency is here. Keep it short: update Decisions/Learned when
+> the user states a preference or a fix worked.
+
+## Identity (same in every video)
+- Brand: {name} - colour {color} - logo {logo} - captions {caps}
+- Voice: {voice} x{speed} - music: auto, -22 dB under the voice
+- Cast: {cast}
+- Format: 9:16, 30 fps, 35-55 s, hook = hands on the everyday object at frame 0, loop ending
+- Render: GPU {gpu} (tier {tier}) - review: `build --q preview` -> preview.mp4 - final: `build --q {final_q}`
+
+## Decisions (user preferences, newest first)
+-
+
+## Learned (one line per fix that worked)
+-
+
+## Videos
+| # | folder | title | status | length |
+|---|--------|-------|--------|--------|
+"""
+
+
+def _log_video(root, folder, title, status, length="-"):
+    f = os.path.join(root, "CHANNEL.md")
+    if not os.path.exists(f):
+        return
+    lines = open(f, encoding="utf-8").read().rstrip("\n").split("\n")
+    row = f"| {folder[:3]} | {folder} | {title} | {status} | {length} |"
+    idx = next((i for i, l in enumerate(lines) if l.startswith(f"| {folder[:3]} | {folder} |")), None)
+    if idx is None: lines.append(row)
+    else: lines[idx] = row
+    open(f, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+
+
+def cmd_init(a):
+    """Make the current folder a channel workspace: CHANNEL.md (memory), videos/, assets/."""
+    c = cfg(); b = brand(c); root = os.path.abspath(".")
+    for sub in ("videos", "assets/models", "assets/characters", "assets/music", "assets/refs"):
+        os.makedirs(os.path.join(root, sub), exist_ok=True)
+    f = os.path.join(root, "CHANNEL.md")
+    if os.path.exists(f):
+        print(f"[s3d] {f} exists (kept)"); return
+    chars = sorted({os.path.splitext(os.path.basename(p))[0] for p in glob.glob(os.path.join(c["chars"], "*.blend"))})
+    real = [x for x in chars if x.startswith("rb_")] or chars
+    g = c.get("gpu") or {}
+    open(f, "w", encoding="utf-8").write(CHANNEL_MD.format(
+        name=a.name or b["name"], color=b["color"], logo=os.path.basename(b.get("logo", "")), caps="3 words, " + b.get("font", ""),
+        voice=c["tts"].get("voice"), speed=c["tts"].get("speed"), cast=", ".join(f"{k}" for k in real[:4]) or "hero (MakeHuman)",
+        gpu=g.get("gpu") or "not detected (run s3d.py gpu --bench)", tier=g.get("tier", "?"),
+        final_q="cycles" if g.get("tier") in ("high", "mid") else "final"))
+    print(f"[s3d] channel workspace ready: {f}\n  new video: s3d.py new <slug>   (creates videos/NNN-<slug>/)")
+
+
+KEEP = ("shots.yaml", "final.mp4", "publish.txt", "thumbnail.jpg", "audio/vo.wav", "audio/words.json")
+
+
+def _size(path):
+    return sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(path) for f in fs) if os.path.isdir(path) else (
+        os.path.getsize(path) if os.path.exists(path) else 0)
+
+
+def cmd_finish(a):
+    """Video done: keep only the deliverables, delete builds/tests/duplicates, log it in CHANNEL.md."""
+    d = vdir(a.slug)
+    if not os.path.exists(os.path.join(d, "final.mp4")) and not a.force:
+        sys.exit("[s3d] no final.mp4 yet (render + assemble first, or --force)")
+    before = _size(d)
+    keep = {os.path.normpath(os.path.join(d, k)) for k in KEEP}
+    for r, dirs, fs in os.walk(d, topdown=False):
+        for fn in fs:
+            p = os.path.normpath(os.path.join(r, fn))
+            if p not in keep:
+                os.remove(p)
+        if r != d and not os.listdir(r):
+            os.rmdir(r)
+    after = _size(d)
+    spec = load_spec(spec_path(d))
+    dur = "-"
+    try:
+        dur = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                              os.path.join(d, "final.mp4")], capture_output=True, text=True).stdout.strip()
+        dur = f"{float(dur):.0f}s"
+    except Exception:
+        pass
+    _log_video(channel_root(), os.path.basename(d), spec.get("title", "-").replace("|", "/"), "done", dur)
+    print(f"[s3d] finished {os.path.basename(d)}: freed {(before - after) / 1e6:.0f} MB, kept {', '.join(sorted(os.path.relpath(k, d) for k in keep if os.path.exists(k)))}")
+    print("  add a 1-line 'Learned' note to CHANNEL.md if something new worked in this video")
+
+
+def cmd_status(a):
+    root = channel_root()
+    if a.slug:
+        d = vdir(a.slug)
+        for pj in glob.glob(os.path.join(d, "build", "*", "progress.json")):
+            pr = json.load(open(pj)); sc = os.path.basename(os.path.dirname(pj))
+            print(f"  {sc}: {pr['q']} {pr['done']}/{pr['total']} frames, {pr['spf']} s/frame, ETA {pr['eta_min']} min")
+        outs = [f for f in ("preview.mp4", "final.mp4") if os.path.exists(os.path.join(d, f))]
+        print(f"[s3d] {os.path.basename(d)}: {_size(d) / 1e6:.0f} MB, outputs: {', '.join(outs) or 'none'}")
+        return
+    for v in sorted(glob.glob(os.path.join(root, "videos", "*"))):
+        outs = "final" if os.path.exists(os.path.join(v, "final.mp4")) else ("preview" if os.path.exists(os.path.join(v, "preview.mp4")) else "-")
+        print(f"  {os.path.basename(v):32s} {_size(v) / 1e6:7.0f} MB  {outs}")
+    print(f"[s3d] workspace {root}: {_size(root) / 1e6:.0f} MB")
+
+
+def cmd_inspect(a):
+    """Every frame of preview.mp4/final.mp4 -> flagged frames sheet (pops, flicker, black, frozen)."""
+    d = vdir(a.slug)
+    vid = next((os.path.join(d, f) for f in ("preview.mp4", "final.mp4") if os.path.exists(os.path.join(d, f))), None)
+    if a.final and os.path.exists(os.path.join(d, "final.mp4")):
+        vid = os.path.join(d, "final.mp4")
+    if not vid:
+        sys.exit("[s3d] nothing to inspect: render + assemble first")
+    sys.path.insert(0, HERE); import s3d_inspect
+    tl = json.load(open(os.path.join(d, "build", "timeline.json")))
+    out = os.path.join(d, "build", "inspect.jpg")
+    lines, top = s3d_inspect.inspect(vid, tl, out)
+    print(f"[s3d] inspected every frame of {os.path.basename(vid)}: " + (f"{len(top)} flags -> {out}" if top else "clean"))
+    for l in lines:
+        print("  " + l)
 
 
 def cmd_brand(a):
@@ -364,7 +619,8 @@ def cmd_plan(a, quiet=False):
         o["fx"] = fxl
         out_shots.append(o)
     plan = {"fps": fps, "res": spec.get("res", [1080, 1920]), "brand": b,
-            "paths": {"mh_data": c["mh_data"], "mh_assets": c["mh_assets"], "chars": c["chars"], "cache": HOME},
+            "paths": {"mh_data": c["mh_data"], "mh_assets": c["mh_assets"], "chars": c["chars"], "cache": HOME, "clips": c["clips"]},
+            "gpu": c.get("gpu", {}),
             "scenes": scenes, "shots": out_shots}
     bd = os.path.join(d, "build"); os.makedirs(bd, exist_ok=True)
     json.dump(plan, open(os.path.join(bd, "plan.json"), "w"), indent=1)
@@ -396,18 +652,32 @@ def cmd_build(a):
     scenes = [a.scene] if a.scene else sorted({s["scene"] for s in plan["shots"] if not a.shots or s["id"] in a.shots.split(",")})
     issues = []; t0 = time.time()
     procs = []
+    nfr = sum(s["f1"] - s["f0"] + 1 for s in plan["shots"] if s["scene"] in scenes and (not a.shots or s["id"] in a.shots.split(","))) // (a.step or 1)
+    eta = _eta(c, a.q, nfr)
+    if eta:
+        print(f"[s3d] rendering {a.q}: {eta}  (progress: s3d.py status {a.slug})")
     for sc in scenes:
         out = os.path.join(d, "build", sc)
         if a.q == "sheet" and os.path.isdir(os.path.join(out, "sheet")):
             shutil.rmtree(os.path.join(out, "sheet"))
         cmd = [bl, "-b", "--factory-startup", "-P", os.path.join(SKILL, "engine", "build.py"), "--",
-               os.path.join(d, "build", "plan.json"), sc, out, a.q] + ([f"shots={a.shots}"] if a.shots else []) + ([f"step={a.step}"] if a.step else []) + (["fast=1"] if a.fast else [])
+               os.path.join(d, "build", "plan.json"), sc, out, a.q] + ([f"shots={a.shots}"] if a.shots else []) + ([f"step={a.step}"] if a.step else []) + (["fast=1"] if a.fast else []) + (["resume=1"] if a.resume else [])
         log = os.path.join(d, "build", "logs", f"{sc}_{a.q}.log")
         procs.append((sc, log, subprocess.Popen(cmd, stdout=open(_mk(log), "w"), stderr=subprocess.STDOUT)))
         if len([p for p in procs if p[2].poll() is None]) >= a.jobs:
             procs[-1][2].wait()
     for sc, log, p in procs:
-        p.wait()
+        shown = 0
+        while p.poll() is None:  # quiet progress: at most 4 lines per scene
+            time.sleep(15)
+            pj = os.path.join(d, "build", sc, "progress.json")
+            if os.path.exists(pj):
+                try:
+                    pr = json.load(open(pj)); k = int(4 * pr["done"] / max(1, pr["total"]))
+                    if k > shown:
+                        shown = k; print(f"  {sc}: {pr['done']}/{pr['total']} frames, {pr['spf']} s/frame, ETA {pr['eta_min']} min", flush=True)
+                except (ValueError, KeyError):
+                    pass
         txt = open(log, errors="ignore").read()
         for l in txt.splitlines():
             if l.startswith("[s3d] QA"): issues.append(f"{sc}: {l[9:]}")
@@ -474,16 +744,18 @@ def cmd_assemble(a):
     for f in glob.glob(os.path.join(d, "build", "*", "events.json")):
         events += json.load(open(f))
     mix = s3d_audio.mix(d, tl, events, os.path.join(HOME, "sfx"), dur)
-    out = os.path.join(d, "final.mp4")
+    qs = {open(m).read().strip() for m in glob.glob(os.path.join(d, "build", "*", "frames", ".quality"))}
+    is_final = bool(qs) and qs <= {"final", "cycles"}
+    out = os.path.join(d, "final.mp4" if is_final else "preview.mp4")
     vf = f"subtitles='{_esc(ass)}':fontsdir='{_esc(os.path.join(SKILL, 'library', 'fonts'))}'" if not a.nocaps else "null"
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(fps), "-i", os.path.join(seq, f"%05d{ext}"), "-i", mix,
-           "-vf", f"{vf},format=yuv420p", "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-profile:v", "high",
+           "-vf", f"{vf},format=yuv420p", "-c:v", "libx264", "-preset", "slow" if is_final else "veryfast", "-crf", "17" if is_final else "23", "-profile:v", "high",
            "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out]
     if subprocess.run(cmd).returncode != 0:
         sys.exit("[s3d] ffmpeg failed")
     meta = s3d_audio.publish_text(tl)
     open(os.path.join(d, "publish.txt"), "w", encoding="utf-8").write(meta)
-    print(f"[s3d] final.mp4: {dur:.1f}s {os.path.getsize(out) / 1e6:.1f} MB -> {out}\n  publish text -> {os.path.join(d, 'publish.txt')}")
+    print(f"[s3d] {os.path.basename(out)}: {dur:.1f}s {os.path.getsize(out) / 1e6:.1f} MB -> {out}\n  publish text -> {os.path.join(d, 'publish.txt')}")
 
 
 def _esc(p):
@@ -509,7 +781,8 @@ def cmd_assets(a):
 def main():
     ap = argparse.ArgumentParser(description="shorts3d-studio")
     sp = ap.add_subparsers(dest="cmd", required=True)
-    sp.add_parser("setup"); sp.add_parser("doctor")
+    p = sp.add_parser("setup"); p.add_argument("--actors", action="store_true", help="also fetch 2 realistic Rocketbox actors (~120 MB)")
+    sp.add_parser("doctor")
     p = sp.add_parser("new"); p.add_argument("slug"); p.add_argument("--template", default="explainer")
     for nm in ("voice", "plan", "assemble"):
         p = sp.add_parser(nm); p.add_argument("slug")
@@ -518,6 +791,12 @@ def main():
                                                                      choices=["sheet", "blocking", "draft", "preview", "final", "cycles"])
     p.add_argument("--shots"); p.add_argument("--scene"); p.add_argument("--jobs", type=int, default=1); p.add_argument("--step", type=int)
     p.add_argument("--fast", action="store_true", help="sheet stills in solid shading (seconds; checks motion/contacts/framing)")
+    p.add_argument("--resume", action="store_true", help="continue an interrupted render (keeps finished frames)")
+    p = sp.add_parser("gpu"); p.add_argument("--bench", action="store_true")
+    p = sp.add_parser("init"); p.add_argument("--name")
+    p = sp.add_parser("finish"); p.add_argument("slug"); p.add_argument("--force", action="store_true")
+    p = sp.add_parser("status"); p.add_argument("slug", nargs="?")
+    p = sp.add_parser("inspect"); p.add_argument("slug"); p.add_argument("--final", action="store_true")
     p = sp.add_parser("analyze"); p.add_argument("video"); p.add_argument("--out")
     p = sp.add_parser("add-character"); p.add_argument("file"); p.add_argument("--name", required=True); p.add_argument("--textures")
     p = sp.add_parser("assets"); p.add_argument("query"); p.add_argument("--hdri", action="store_true"); p.add_argument("-n", type=int, default=12)
@@ -525,7 +804,8 @@ def main():
     a = ap.parse_args()
     {"setup": cmd_setup, "doctor": cmd_doctor, "new": cmd_new, "voice": cmd_voice, "plan": cmd_plan, "build": cmd_build,
      "assemble": cmd_assemble, "analyze": cmd_analyze, "assets": cmd_assets, "brand": cmd_brand,
-     "add-character": cmd_add_character}[a.cmd](a)
+     "add-character": cmd_add_character, "gpu": cmd_gpu, "init": cmd_init, "finish": cmd_finish,
+     "status": cmd_status, "inspect": cmd_inspect}[a.cmd](a)
 
 
 if __name__ == "__main__":

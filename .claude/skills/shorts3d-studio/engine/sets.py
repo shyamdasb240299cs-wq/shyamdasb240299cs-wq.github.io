@@ -143,7 +143,7 @@ def light_rig(kind, center, facing_yaw=0.0, coll=None, scale=1.0):
 
 
 # ------------------------------------------------------------------ render quality
-def render(quality="preview", res=(1080, 1920), fps=30, engine=None):
+def render(quality="preview", res=(1080, 1920), fps=30, engine=None, gpu=None):
     sc = bpy.context.scene; r = sc.render
     r.fps = fps
     r.resolution_x, r.resolution_y = res
@@ -165,23 +165,28 @@ def render(quality="preview", res=(1080, 1920), fps=30, engine=None):
         sh = sc.display.shading; sh.light = "STUDIO"; sh.color_type = "TEXTURE"; sh.show_shadows = True
         sc.display.render_aa = "FXAA"
     elif eng == "CYCLES":
-        c = sc.cycles; c.samples = 96 if quality != "cycles_preview" else 24
-        c.use_adaptive_sampling = True; c.adaptive_threshold = 0.02; c.use_denoising = True
-        c.max_bounces = 8; c.caustics_reflective = c.caustics_refractive = False
+        g = gpu or {}
+        c = sc.cycles; c.samples = int(g.get("samples", 96))
+        c.use_adaptive_sampling = True; c.adaptive_threshold = 0.03; c.use_denoising = True
+        c.max_bounces = 8; c.diffuse_bounces = 3; c.glossy_bounces = 3; c.transmission_bounces = 8
+        c.transparent_max_bounces = 8; c.volume_bounces = 0; c.sample_clamp_indirect = 10
+        c.caustics_reflective = c.caustics_refractive = False
+        r.use_persistent_data = True                       # keep BVH/textures in VRAM between frames
+        try: c.texture_limit_render = str(g.get("texture_limit", "OFF"))
+        except Exception: pass
+        from . import gpu as G
+        backend = g.get("backend") or G.detect().get("backend", "NONE")
+        on_gpu = G.use_gpu(backend)
         try:
-            prefs = bpy.context.preferences.addons["cycles"].preferences
-            prefs.get_devices()
-            for dev_type in ("OPTIX", "CUDA", "HIP", "METAL", "ONEAPI"):
-                if any(d.type == dev_type for d in prefs.devices):
-                    prefs.compute_device_type = dev_type
-                    for d in prefs.devices: d.use = True
-                    c.device = "GPU"; break
+            c.denoiser = "OPTIX" if backend == "OPTIX" else "OPENIMAGEDENOISE"
+            c.denoising_use_gpu = on_gpu
         except Exception:
             pass
-        r.use_motion_blur = quality != "preview"
+        core.log(f"cycles: {'GPU ' + backend if on_gpu else 'CPU'} {c.samples} spp, textures {g.get('texture_limit', 'OFF')}")
+        r.use_motion_blur = True
     else:
         ee = sc.eevee
-        ee.taa_render_samples = {"preview": 12, "draft": 8, "final": 64}.get(quality, 32)
+        ee.taa_render_samples = {"preview": 8, "draft": 6, "final": 64}.get(quality, 32)
         for attr, val in (("use_raytracing", quality == "final"), ("use_shadows", True), ("shadow_ray_count", 2),
                           ("use_gtao", True), ("fast_gi_method", "GLOBAL_ILLUMINATION")):
             if hasattr(ee, attr):

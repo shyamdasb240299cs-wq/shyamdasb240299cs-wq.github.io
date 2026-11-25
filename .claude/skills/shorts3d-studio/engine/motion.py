@@ -7,9 +7,10 @@ Pass C  attachments: props follow the actual hand bone between grasp and release
 """
 import bpy, math
 from mathutils import Vector, Quaternion, Matrix
-from . import core, acting, props as P
+from . import core, acting, props as P, mocap
 from .core import Track, log, minjerk, smooth, clamp
 
+FINGERS = ("thumb", "index", "middle", "ring", "pinky")
 RELAX = {"thumb": .15, "index": .2, "middle": .27, "ring": .33, "pinky": .4}
 FIST = {"thumb": .6, "index": .95, "middle": 1.0, "ring": 1.0, "pinky": 1.0}
 OPEN = {"thumb": .02, "index": .02, "middle": .03, "ring": .04, "pinky": .05}
@@ -20,6 +21,8 @@ def Rz(a):
     return Quaternion((0, 0, 1), a)
 
 
+HINGE = 0.45      # crouching pushes the pelvis back 0.45 m per metre of drop (hip hinge keeps balance)
+TURNOUT = math.radians(7)  # natural stance: toes turned out
 NOGAIN = ("jaw", "eyeBlink", "eyeLook", "v:", "mouthClose", "tongue")
 
 
@@ -57,6 +60,9 @@ class Performer:
         self.events = []
         self.holding = {"L": None, "R": None}
         self.noise = core.Noise1D(seed)
+        self.clip_layers, self._cc, self.clips_dir = [], {}, None
+        self.L_ua = {s: (ch.arm_head(f"forearm.{s}") - ch.arm_head(f"upperarm.{s}")).length for s in "LR"}
+        self.L_fa = {s: (ch.arm_head(f"hand.{s}") - ch.arm_head(f"forearm.{s}")).length for s in "LR"}
 
     def holding_at(self, prop, f):
         """Side ('L'/'R') holding prop at frame f, else None."""
@@ -84,7 +90,7 @@ class Performer:
     def spine_rot(self, t, frac=1.0):
         return Quaternion((1, 0, 0), self.lean.at(t) * frac) @ Quaternion((0, 0, 1), self.twist.at(t) * frac)
 
-    def chain_deltas(self, lean, twist=0.0, back=0.0, nod=0.0, tilt=0.0, headyaw=0.0, shrug=0.0, pyaw=0.0, breath=0.0):
+    def chain_deltas(self, lean, twist=0.0, back=0.0, nod=0.0, tilt=0.0, headyaw=0.0, shrug=0.0, pyaw=0.0, breath=0.0, clip=None):
         """Armature-space total rotation of every torso bone - the SAME model the bake writes."""
         ch = self.ch; D = {}
         hips = ch.b["hips"]
@@ -103,6 +109,20 @@ class Performer:
             if cb:
                 g = 1 if s_ == "L" else -1
                 D[cb] = Quaternion((0, 1, 0), -g * shrug) @ top
+        if clip and clip[0] > 0 and "torso" in clip[1]["parts"]:
+            W, C = clip; I = Quaternion()
+            lay = lambda d, q: I.slerp(q, W) @ d
+            if "hips" in C["q"]:
+                D[hips] = lay(D[hips], C["q"]["hips"])
+            for i, bn in enumerate(ch.spine):
+                D[bn] = lay(D[bn], mocap.spine_delta(C["sp"], i, nsp))
+            for k in ("neck", "head"):
+                if ch.b.get(k) and k in C["q"]:
+                    D[ch.b[k]] = lay(D[ch.b[k]], C["q"][k])
+            for s_ in "LR":
+                cb = ch.b.get(f"shoulder.{s_}")
+                if cb and f"shoulder.{s_}" in C["q"]:
+                    D[cb] = lay(D[cb], C["q"][f"shoulder.{s_}"])
         return D
 
     def posed_point(self, D, bone_name, p_arm, crouch=0.0):
@@ -113,7 +133,7 @@ class Performer:
         while b is not None:
             chain.append(b); b = b.parent
         chain.reverse()
-        hp = chain[0].head_local + Vector((0, 0, -crouch))
+        hp = chain[0].head_local + Vector((0, HINGE * crouch, -crouch))
         for i in range(1, len(chain)):
             par = chain[i - 1]
             hp = hp + D.get(par.name, Quaternion()) @ (chain[i].head_local - par.head_local)
@@ -122,7 +142,7 @@ class Performer:
 
     def deltas_at(self, t):
         return self.chain_deltas(self.lean.at(t), self.twist.at(t), self.back.at(t), self.nod.at(t), self.tilt.at(t),
-                                 self.headyaw.at(t), self.shrug.at(t))
+                                 self.headyaw.at(t), self.shrug.at(t), clip=self.clip_at(t))
 
     def head_point(self, t, p_arm):
         """World position of a head-attached point (exact torso FK; look-at constraint corrected in pass B)."""
@@ -150,17 +170,63 @@ class Performer:
     def hand_target(self, s, t):
         """World wrist location + world hand rotation for frame time t."""
         w_rest, q_rest = self.rest_hand(s, t)
-        w_rest = w_rest + self.hb[s].at(t) + self._swing(s, t)
         bw = self.hbw[s].at(t)
+        wa = self._clip_arm_w(s, t)
+        if wa > 0:
+            wc, qc, _ = self._clip_arm(s, t)
+            w_rest, q_rest = w_rest.lerp(wc, wa), q_rest.slerp(qc, wa)
+        w_rest = w_rest + self.hb[s].at(t) + self._swing(s, t)
         if bw > 0:
             q_rest = q_rest.slerp(self.hbq[s].at(t), bw)
         M = self.M(t); Mq = M.to_quaternion()
         wr, qr = M @ w_rest, Mq @ q_rest
         k = self.hs[s].at(t)
         if k <= 0:
-            return wr + self.ha[s].at(t), qr
-        w = wr.lerp(self.hw[s].at(t) + self.hcorr[s].at(t), k) + self.ha[s].at(t)
-        return w, qr.slerp(self.hq[s].at(t), k)
+            w, q = wr + self.ha[s].at(t), qr
+        else:
+            w = wr.lerp(self.hw[s].at(t) + self.hcorr[s].at(t), k) + self.ha[s].at(t)
+            q = qr.slerp(self.hq[s].at(t), k)
+        if k < 1.0:  # free / gesturing hands obey anatomy; grasps keep their exact contact orientation
+            q = q.slerp(self._wrist_limit(s, t, w, q), 1.0 - k)
+        return w, q
+
+    WRIST = {"flex": 75, "ext": 60, "dev": 25, "twist": 95}  # degrees, measured from the forearm
+
+    def _wrist_limit(self, s, t, w, q):
+        """Clamp the hand to the anatomical range of the wrist (relative to the forearm the IK will produce):
+        flexion 75 / extension 60 / deviation 25 deg, pronation-supination 95 deg from 'handshake' neutral."""
+        h = self.ch.hand[s]; L1, L2 = self.L_ua[s], self.L_fa[s]
+        S = self.shoulder_world(t, s); P_ = self._elbow_pole(s, t, w)
+        d = w - S; dist = min(max(d.length, 1e-4), (L1 + L2) * 0.999); dn = d.normalized()
+        a_ = (L1 * L1 - L2 * L2 + dist * dist) / (2 * dist); hh = math.sqrt(max(0.0, L1 * L1 - a_ * a_))
+        pv = P_ - S; pv -= pv.project(dn)
+        if pv.length < 1e-6:
+            return q
+        E = S + dn * a_ + pv.normalized() * hh
+        f = (w - E).normalized()
+        fing = (q @ h["fing_l"]).normalized(); palm = (q @ h["palm_l"]).normalized()
+        pal = palm - palm.project(f)
+        if pal.length < 1e-6:
+            return q
+        pal.normalize(); lat = f.cross(pal)
+        x, y, z = fing.dot(f), fing.dot(pal), fing.dot(lat)
+        flex = math.atan2(y, x); dev = math.atan2(z, math.hypot(x, y))
+        L = self.WRIST
+        fc = clamp(flex, -math.radians(L["ext"]), math.radians(L["flex"])); dc = clamp(dev, -math.radians(L["dev"]), math.radians(L["dev"]))
+        if abs(fc - flex) > 1e-4 or abs(dc - dev) > 1e-4:
+            nf = f * (math.cos(dc) * math.cos(fc)) + pal * (math.cos(dc) * math.sin(fc)) + lat * math.sin(dc)
+            q = fing.rotation_difference(nf.normalized()) @ q
+        nb = (E - S).cross(w - E)
+        if nb.length > 1e-4:  # twist about the forearm, around the handshake-neutral palm direction
+            ref = nb.normalized() * (1 if s == "L" else -1)
+            palm = (q @ h["palm_l"]); pal = palm - palm.project(f)
+            if pal.length > 1e-6:
+                pal.normalize()
+                tau = math.atan2(f.dot(ref.cross(pal)), ref.dot(pal))
+                lim = math.radians(L["twist"])
+                if abs(tau) > lim:
+                    q = Quaternion(f, math.copysign(lim, tau) - tau) @ q
+        return q
 
     def _swing(self, s, t):
         for (t0, t1, step_t) in self.walk_iv:
@@ -222,6 +288,70 @@ class Performer:
             self.look.key(t + 0.02, ol, "hold").key(t + 0.45, p, "mj")
 
     # ------------------------------------------------------------ locomotion
+    # ------------------------------------------------------------ mocap layer
+    def v_clip(self, t0, a):
+        """Real human motion: {name: talk|idle|shrug|think|agree|... or a clip file, dur, amt, fade, speed, loop,
+        from (s into clip), parts: [torso, arms, fingers, hips]}"""
+        clip = mocap.find(str(a.get("name", "idle")), self.clips_dir or "", log)
+        if clip is None:
+            return t0
+        speed = float(a.get("speed", 1.0)); loop = a.get("loop", True)
+        dur = float(a["dur"]) if a.get("dur") else (clip.dur - float(a.get("from", 0))) / speed
+        lay = {"clip": clip, "t0": t0, "t1": t0 + dur, "amt": float(a.get("amt", 1.0)), "fade": float(a.get("fade", 0.4)),
+               "speed": speed, "loop": loop, "off": float(a.get("from", 0.0)),
+               "parts": set(a.get("parts", ["torso", "arms", "fingers", "hips"]))}
+        self.clip_layers.append(lay); self._cc.clear()
+        return t0 + dur
+
+    def add_idle(self, name="idle", amt=0.75):
+        """Whole-timeline base layer of real idle motion (weight shifts, breathing, small arm drift)."""
+        clip = mocap.find(name, self.clips_dir or "", log)
+        if clip:
+            self.clip_layers.insert(0, {"clip": clip, "t0": -1.0, "t1": 1e9, "amt": amt, "fade": 0.0, "speed": 1.0,
+                                        "loop": True, "off": 0.0, "parts": {"torso", "arms", "fingers", "hips"}})
+            self._cc.clear()
+
+    def clip_at(self, t):
+        """(weight, blended sample) of all clip layers at time t (later layers win)."""
+        key = round(t, 4)
+        if key in self._cc:
+            return self._cc[key]
+        W, S = 0.0, None
+        for L in self.clip_layers:
+            if not (L["t0"] <= t <= L["t1"]):
+                continue
+            fd = L["fade"]
+            w = L["amt"] * (smooth((t - L["t0"]) / fd) * smooth((L["t1"] - t) / fd) if fd > 0 else 1.0)
+            if w <= 0:
+                continue
+            u = (t - L["t0"]) * L["speed"] + L["off"]
+            if L["loop"] and L["clip"].dur > 0:
+                u = u % L["clip"].dur
+            smp = L["clip"].sample(u); smp["parts"] = L["parts"]
+            if S is None:
+                S, W = smp, w
+            else:  # later layers win by their own weight (a gesture fully replaces the idle under it)
+                S = mocap.blend(S, smp, w); W = W + (1 - W) * w
+        self._cc[key] = (W, S) if S is not None else (0.0, {"parts": set()})
+        return self._cc[key]
+
+    def _clip_arm_w(self, s, t, part="arms"):
+        W, S = self.clip_at(t)
+        if W <= 0 or part not in S["parts"]:
+            return 0.0
+        return W * (1 - self.hbw[s].at(t))
+
+    def _clip_arm(self, s, t):
+        """Clip arm pose on THIS actor (armature space): wrist, hand rotation, (elbow, shoulder)."""
+        C = self.clip_at(t)[1]; ch = self.ch
+        D = self.deltas_at(t)
+        cb = ch.b.get(f"shoulder.{s}") or ch.spine[-1]
+        shp = self.posed_point(D, cb, ch.arm_head(f"upperarm.{s}"), self.crouch.at(t))
+        el = shp + C["ua"][s] * self.L_ua[s]
+        wr = el + C["fa"][s] * self.L_fa[s]
+        q = C["q"].get(f"hand.{s}", Quaternion()) @ ch.bone(f"hand.{s}").matrix_local.to_quaternion()
+        return wr, q, (el, shp)
+
     def v_walk_to(self, t0, a):
         tgt = self._target_point(a["target"]) if "target" in a else Vector((*a["pos"], 0))
         start = self.root_pos.at(t0); stop = a.get("stop", "near")
@@ -366,7 +496,7 @@ class Performer:
         s = a.get("hand", "auto")
         s = self._side_for(p, t0) if s in ("auto", None) else s[0].upper()
         sh = self.shoulder_world(t0, s)
-        g = P.grip(ob, sh, a.get("grip", "auto")) if ob else {
+        g = P.grip(ob, sh, a.get("grip", "auto"), side=s) if ob else {
             "palm_point": p, "palm_n": (p - sh).normalized(), "fingers": (p - sh).normalized(), "approach": (p - sh).normalized(), "type": "point", "width": 0.05}
         q = self.ch.hand_world_rot(s, g["palm_n"], g["fingers"])
         wg = self.ch.wrist_for_palm(s, g["palm_point"], q)
@@ -636,7 +766,7 @@ class Performer:
     def v_thumbs_up(self, t0, a):
         s = (a.get("hand") or "R")[0].upper(); g = self._sg(s)
         self.face.expr("happy", t0, t0 + 1.6)
-        return self._gesture(s, t0, 0.4, float(a.get("hold", 1.2)), (-g * 0.06, -0.3, -0.34), (-g, 0, 0), (0, -1, 0.15),
+        return self._gesture(s, t0, 0.4, float(a.get("hold", 1.2)), (-g * 0.05, -0.27, -0.15), (-g, 0, 0), (0, -1, 0.15),
                              {"thumb": 0.0, "index": 1, "middle": 1, "ring": 1, "pinky": 1})
 
     def v_shrug(self, t0, a):
@@ -768,7 +898,7 @@ class Performer:
         p, yaw, pitch = self.foot_at(s, t)
         fb = self.ch.bone(f"foot.{s}")
         q_rest = fb.matrix_local.to_quaternion()
-        q_yaw = Rz(yaw)
+        q_yaw = Rz(yaw + (TURNOUT if s == "L" else -TURNOUT))
         lat = q_yaw @ Vector((1, 0, 0))
         q = Quaternion(lat, pitch) @ q_yaw @ q_rest
         if pitch > 0:  # heel lift: pivot at the ball of the foot
@@ -808,11 +938,14 @@ class Performer:
                     pyaw = math.radians(4) * env * math.sin(ph)
             breath = 0.004 * math.sin(t * 2 * math.pi / 3.8)
             shiftw = 0.006 * self.noise(t * 0.25)
-            off = Vector((sway + shiftw, 0, bob - self.crouch.at(t)))
+            off = Vector((sway + shiftw, HINGE * self.crouch.at(t), bob - self.crouch.at(t)))
+            cw, cs = self.clip_at(t)
+            if cw > 0 and "hips" in cs["parts"]:
+                off += cs["hip"] * (cw * ch.hips_h)
             loc = H3i @ off
             kw.put(rig, f'pose.bones["{hips.name}"].location', f, loc)
             DD = self.chain_deltas(self.lean.at(t), self.twist.at(t), self.back.at(t), self.nod.at(t), self.tilt.at(t),
-                                   self.headyaw.at(t), self.shrug.at(t), pyaw, breath)
+                                   self.headyaw.at(t), self.shrug.at(t), pyaw, breath, clip=(cw, cs))
             kw.put(rig, f'pose.bones["{hips.name}"].rotation_quaternion', f, core.rest_local_rot(hips, DD[hips.name]))
             for bn in chain + [x for x in (ch.b.get("shoulder.L"), ch.b.get("shoulder.R")) if x]:
                 b = rig.data.bones[bn]
@@ -852,8 +985,15 @@ class Performer:
         wl = M.inverted() @ wrist
         u = smooth((wl.z - (sh.z - 0.45)) / 0.45)  # 0 = arm hanging, 1 = hand raised (to mouth/face)
         po = self.pole_out[s].at(t)
-        return M @ Vector((sh.x + g * (0.04 + 0.3 * u + 0.55 * po), sh.y + 0.55 * (1 - u) * (1 - po) + 0.05 + 0.1 * po,
+        pole = M @ Vector((sh.x + g * (0.04 + 0.3 * u + 0.55 * po), sh.y + 0.55 * (1 - u) * (1 - po) + 0.05 + 0.1 * po,
                            sh.z - 0.3 - 0.15 * u + 0.05 * po))
+        wa = self._clip_arm_w(s, t) * (1 - self.hs[s].at(t))
+        if wa > 0:
+            wc, _, el = self._clip_arm(s, t)
+            shp = el[1]; mid = (shp + wc) / 2; dv = el[0] - mid
+            if dv.length > 0.01:
+                pole = pole.lerp(M @ (el[0] + dv.normalized() * 0.35), wa)
+        return pole
 
     def _bake_fingers(self, kw, frames):
         rig = self.ch.rig
@@ -861,7 +1001,18 @@ class Performer:
             for f in frames:
                 t = f / self.fps
                 curls = {k: tr.at(t) for k, tr in self.curl[s].items()}
-                for bn, q in self.ch.finger_quats(s, curls, self.spread[s].at(t)).items():
+                quats = self.ch.finger_quats(s, curls, self.spread[s].at(t))
+                wa = self._clip_arm_w(s, t, "fingers") * (1 - self.hs[s].at(t))
+                if wa > 0:
+                    C = self.clip_at(t)[1]
+                    for fg in FINGERS:
+                        for n in (1, 2, 3):
+                            k, pk = f"{fg}{n}.{s}", (f"{fg}{n - 1}.{s}" if n > 1 else f"hand.{s}")
+                            bn = self.ch.b.get(k)
+                            if bn in quats and k in C["q"] and pk in C["q"]:
+                                ql = core.rest_local_rot(rig.data.bones[bn], C["q"][k], C["q"][pk])
+                                quats[bn] = quats[bn].slerp(ql, wa)
+                for bn, q in quats.items():
                     kw.put(rig, f'pose.bones["{bn}"].rotation_quaternion', f, q)
 
     # ------------------------------------------------------------ pass B: contacts

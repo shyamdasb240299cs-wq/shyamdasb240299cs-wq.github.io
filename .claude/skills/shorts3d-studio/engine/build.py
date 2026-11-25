@@ -3,7 +3,7 @@
 blender -b --factory-startup -P engine/build.py -- <plan.json> <scene> <out_dir> <quality> [shots=S01,S02]
 quality: sheet (3 stills/shot) | blocking (workbench, all frames) | preview (EEVEE 50%) | final (EEVEE) | cycles
 """
-import bpy, sys, os, json, time, math
+import bpy, sys, os, json, time, math, glob
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from mathutils import Vector
 from engine import core, rigkit, motion, props as P, sets, camera, fx, qa, mhchar  # noqa: E402
@@ -187,11 +187,19 @@ def main():
         ch = rigkit.Character(key, rig); ch.setup_controls(); chars[key] = ch
         if brand.get("shirt", True):
             clothes = [o for o in ch.meshes if o.get("s3d_part") == "clothes"]
+            tint = cs.get("shirt", brand.get("shirt_color"))
+            if not clothes:  # single-mesh asset character: decal onto the body texture's shirt, never tint the skin
+                clothes = [o for o in ch.meshes if o.get("s3d_part") == "body"]; tint = None
             chest = rig.matrix_world @ (ch.arm_head("upperarm.L").lerp(ch.arm_head("upperarm.R"), 0.5) + Vector((0, 0, -0.13)))
             fwd = rig.matrix_world.to_quaternion() @ ch.fwd
-            sets.shirt_decal(clothes, logo, chest, fwd, size=float(brand.get("shirt_logo_size", 0.12)),
-                             tint=cs.get("shirt", brand.get("shirt_color")))
-        perfs[key] = motion.Performer(ch, at, yaw, fps, seed=len(perfs) + 1, scene_props=objs)
+            sets.shirt_decal(clothes, logo, chest, fwd, size=float(brand.get("shirt_logo_size", 0.12)), tint=tint)
+        perfs[key] = pf = motion.Performer(ch, at, yaw, fps, seed=len(perfs) + 1, scene_props=objs)
+        pf.clips_dir = paths.get("clips") or os.path.join(paths.get("cache", ""), "clips")
+        idle = cs.get("idle", "auto")  # real mocap idle under everything (auto: if the clip is installed)
+        if idle not in (None, False, "none", "off"):
+            nm = "idle" if idle == "auto" else str(idle)
+            if idle != "auto" or glob.glob(os.path.join(pf.clips_dir, "m_idle_neutral_01.*")):
+                pf.add_idle(nm, float(cs.get("idle_amt", 0.7)))
     # performance script (prop verbs too)
     for it in S.get("script", []):
         who = it["who"]; a = dict(it.get("args", {}))
@@ -256,7 +264,8 @@ def main():
         if it["verb"] == "pop": evs.append({"type": "pop", "t": float(it["args"].get("at_s", 0))})
     json.dump(sorted([e for e in evs if inside(e["t"])], key=lambda e: e["t"]), open(os.path.join(out, "events.json"), "w"))
     # QA
-    issues = qa.run(list(perfs.values()), {k: v for k, v in objs.items() if v.get("s3d_prop")}, shots, frames)
+    issues = qa.run(list(perfs.values()), {k: v for k, v in objs.items() if v.get("s3d_prop")}, shots, frames,
+                    step=1 if quality in ("draft", "preview", "final", "cycles") else 3)  # every frame before a real render
     json.dump({"scene": scene_name, "issues": issues, "log": core.LOG[-60:]}, open(os.path.join(out, f"qa_{scene_name}.json"), "w"), indent=1)
     for sh in shots:
         sh.pop("_target_fn", None)
@@ -278,7 +287,7 @@ def main():
     q = {"sheet": "preview", "blocking": "blocking", "draft": "draft", "preview": "preview", "final": "final", "cycles": "cycles"}[quality]
     if quality == "sheet" and opts.get("fast"):
         q = "blocking"
-    sets.render(q, tuple(plan.get("res", (1080, 1920))), fps)
+    sets.render(q, tuple(plan.get("res", (1080, 1920))), fps, gpu=plan.get("gpu"))
     if quality == "sheet":
         sc.render.resolution_percentage = int(opts.get("pct", 40))
         for sh in shots:
@@ -290,6 +299,29 @@ def main():
         fdir = os.path.join(out, "frames"); os.makedirs(fdir, exist_ok=True)
         step = int(opts.get("step", 1))
         sc.frame_step = step
+        mark = os.path.join(fdir, ".quality")
+        old_q = open(mark).read().strip() if os.path.exists(mark) else None
+        resume = bool(opts.get("resume")) and old_q == quality
+        if old_q != quality:  # never mix qualities inside one video
+            for fp in glob.glob(os.path.join(fdir, "*.*")):
+                os.remove(fp)
+        elif not resume:
+            for sh in shots:
+                for f in range(sh["f0"], sh["f1"] + 1):
+                    for ext in (".png", ".jpg"):
+                        fp = os.path.join(fdir, f"{f:05d}{ext}")
+                        if os.path.exists(fp): os.remove(fp)
+        open(mark, "w").write(quality)
+        sc.render.use_overwrite = not resume; sc.render.use_placeholder = resume  # crash/sleep -> rerun with --resume
+        total = sum((sh["f1"] - sh["f0"]) // step + 1 for sh in shots); done = [0]; t_r = time.time()
+        prog = os.path.join(out, "progress.json")
+
+        def _post(scene, *_):
+            done[0] += 1; spf = (time.time() - t_r) / done[0]; left = max(0, total - done[0])
+            json.dump({"q": quality, "done": done[0], "total": total, "spf": round(spf, 2), "eta_min": round(spf * left / 60, 1)}, open(prog, "w"))
+            if done[0] in (2, 10) or done[0] % 100 == 0:
+                print(f"[s3d] frame {done[0]}/{total}  {spf:.1f} s/frame  ETA {spf * left / 60:.0f} min", flush=True)
+        bpy.app.handlers.render_post.append(_post)
         for sh in shots:
             sc.frame_start, sc.frame_end = sh["f0"], sh["f1"]
             sc.render.filepath = os.path.join(fdir, "#####")

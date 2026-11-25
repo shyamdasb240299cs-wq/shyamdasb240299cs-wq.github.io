@@ -1,5 +1,5 @@
 """Reference video analyzer: cuts, pacing, camera motion, colour, caption zone, hook/loop transcript, contact sheets.
-Every frame is inspected (at 15 fps analysis rate); the output is a compact report Claude can read cheaply.
+EVERY frame is inspected at the video's native rate (30/60 fps); the output is a compact report Claude reads cheaply.
 
 python s3d.py analyze ref.mp4   ->  ref_analysis/{report.md, shots.jpg, hook.jpg, data.json}
 needs: ffmpeg; numpy + opencv-python-headless (pip install numpy opencv-python-headless pillow); optional faster-whisper
@@ -7,19 +7,28 @@ needs: ffmpeg; numpy + opencv-python-headless (pip install numpy opencv-python-h
 import json, os, subprocess, math
 
 
-def _frames(video, fps=15, w=180):
+def native_fps(video):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", video],
+                       capture_output=True, text=True).stdout.strip()
+    a, _, b = r.partition("/")
+    return float(a) / float(b or 1) if a else 30.0
+
+
+def _frames(video, fps=None, w=180):
     import numpy as np
+    fps = fps or native_fps(video)
     p = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", video],
                        capture_output=True, text=True).stdout.strip().split(",")
     W, H = int(p[0]), int(p[1]); h = int(w * H / W) // 2 * 2
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", video, "-vf", f"fps={fps},scale={w}:{h}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", video, "-vf", f"fps={fps:.5f},scale={w}:{h}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
                          capture_output=True).stdout
     n = len(raw) // (w * h * 3)
     return np.frombuffer(raw[:n * w * h * 3], dtype=np.uint8).reshape(n, h, w, 3), (W, H)
 
 
-def analyze(video, out, fps=15):
+def analyze(video, out, fps=None):
     import numpy as np
+    fps = fps or native_fps(video)  # every frame, not a sample
     try:
         import cv2
     except ImportError:
