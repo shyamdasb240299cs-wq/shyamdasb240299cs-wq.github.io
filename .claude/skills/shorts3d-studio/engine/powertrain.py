@@ -1,7 +1,7 @@
 """Procedural powertrain parts for explainers: V8 (block, heads, valve covers, intake plenum, exhaust manifolds,
 front accessories, moving pistons/rods/crank for x-ray), turbocharger parts (compressor wheel with splitter blades,
 turbine wheel, shaft, centre housing, snail volutes), intercooler, wastegate, pipes that can 'grow', and flow streams
-(Geometry Nodes particles running along a curve: blue intake air, orange exhaust).
+(Geometry Nodes streamlines along a curve: blue intake air, orange exhaust; older particle flows kept).
 
 Engine space: X = left, Y = back (front of engine at -Y, like vehicle canonical space), Z = up, origin on the crank axis.
 All sizes are real (metres). Materials are physically based so the same parts look right in a studio or inside a car.
@@ -59,15 +59,15 @@ def hot_material(name, base, metallic=0.85, rough=0.6):
     core.set_input(b, "Base Color", (*base, 1)); core.set_input(b, "Metallic", metallic); core.set_input(b, "Roughness", rough)
     _bump(nt, b, 1200.0, 0.2)
     heat = nt.nodes.new("ShaderNodeValue"); heat.name = "heat"; heat.outputs[0].default_value = 0.0
-    bb = nt.nodes.new("ShaderNodeBlackbody"); tmp = nt.nodes.new("ShaderNodeMapRange")
-    tmp.inputs["To Min"].default_value = 700.0; tmp.inputs["To Max"].default_value = 1250.0
-    nt.links.new(heat.outputs[0], tmp.inputs["Value"]); nt.links.new(tmp.outputs[0], bb.inputs[0])
+    bb = nt.nodes.new("ShaderNodeValToRGB"); el = bb.color_ramp.elements        # dull red -> hot orange (not pink)
+    el[0].position = 0.0; el[0].color = (0.55, 0.035, 0.0, 1); el[1].position = 1.0; el[1].color = (1.0, 0.33, 0.02, 1)
+    nt.links.new(heat.outputs[0], bb.inputs[0])
     tc = nt.nodes.new("ShaderNodeTexCoord"); nz = nt.nodes.new("ShaderNodeTexNoise"); nz.inputs["Scale"].default_value = 60
     nt.links.new(tc.outputs["Object"], nz.inputs[0])
     st = nt.nodes.new("ShaderNodeMath"); st.operation = "MULTIPLY"; nt.links.new(heat.outputs[0], st.inputs[0])
-    st2 = nt.nodes.new("ShaderNodeMapRange"); st2.inputs["To Min"].default_value = 2.0; st2.inputs["To Max"].default_value = 9.0
+    st2 = nt.nodes.new("ShaderNodeMapRange"); st2.inputs["To Min"].default_value = 1.2; st2.inputs["To Max"].default_value = 5.0
     nt.links.new(nz.outputs["Fac"], st2.inputs["Value"]); nt.links.new(st2.outputs[0], st.inputs[1])
-    nt.links.new(bb.outputs[0], b.inputs["Emission Color"]); nt.links.new(st.outputs[0], b.inputs["Emission Strength"])
+    nt.links.new(bb.outputs["Color"], b.inputs["Emission Color"]); nt.links.new(st.outputs[0], b.inputs["Emission Strength"])
     return m
 
 
@@ -391,6 +391,20 @@ class V8:
                     Vector((0.05, y - 0.05, 0.25)), Vector((-0.08, y - 0.05, 0.12)), Vector((-0.09, y - 0.05, -0.02))]
         b = tube("v8_belt", belt_pts, 0.006, c, M["rubber"]); b.data.splines[0].use_cyclic_u = True    # closed loop, no duplicate point
         self.parts["belt"] = b
+        # bolt heads + a timing mark on each belt-driven face (crank pulley, water pump, alternator), so the running engine
+        # reads on camera. cyl() runs from its origin along local Z, here rotated to -Y: the front face is at y - h.
+        self.spinners = []
+        for key, r, h, ratio in (("crank_pulley", 0.085, 0.035, 1.0), ("pump_pulley", 0.06, 0.03, 0.085 / 0.06), ("alternator", 0.065, 0.11, 0.085 / 0.065)):
+            pl = self.parts[key]; Mi = Matrix.LocRotScale(pl.location, pl.rotation_euler, pl.scale).inverted()
+            yf = pl.location.y - h; nb = 5 if r > 0.07 else 4
+            for i in range(nb):
+                a_ = 2 * math.pi * i / nb
+                w = Vector((pl.location.x + r * 0.52 * math.cos(a_), yf + 0.002, pl.location.z + r * 0.52 * math.sin(a_)))
+                bt = cyl(f"{pl.name}_bolt{i}", 0.0055, 0.007, c, M["steel"], loc=w, rot=(math.radians(90), 0, 0), n=6)
+                bt.parent = pl; bt.matrix_parent_inverse = Matrix.Identity(4); bt.matrix_basis = Mi @ bt.matrix_basis
+            mk = box(f"{pl.name}_mark", (0.007, 0.004, r * 0.26), c, M["brand"], loc=(pl.location.x, yf - 0.0015, pl.location.z + r * 0.8), bevel=0.001)
+            mk.parent = pl; mk.matrix_parent_inverse = Matrix.Identity(4); mk.matrix_basis = Mi @ mk.matrix_basis
+            self.spinners.append((pl, ratio))
 
     def _internals(self):
         c, M = self.coll, self.M
@@ -408,7 +422,9 @@ class V8:
     PIN = (0.0, 90.0, 270.0, 180.0)
 
     def pose(self, theta, frame):
-        """Key the pistons/rods for crank angle theta (rad)."""
+        """Key the pistons/rods (and the belt-driven front pulleys) for crank angle theta (rad)."""
+        for pl, ratio in getattr(self, "spinners", []):
+            pl.rotation_euler = (math.radians(90), -theta * ratio, 0); pl.keyframe_insert("rotation_euler", frame=frame)
         r = self.stroke / 2
         self.cranks.rotation_euler = (math.radians(-90), theta, 0); self.cranks.keyframe_insert("rotation_euler", frame=frame)
         for (p, side, i, y), rd in zip(self.pistons, self.rods):
@@ -445,7 +461,7 @@ def flow_group():
     div = N.new("ShaderNodeMath"); div.operation = "DIVIDE"; L.new(idx.outputs[0], div.inputs[0]); L.new(gi.outputs["Count"], div.inputs[1])
     rj = N.new("FunctionNodeRandomValue"); rj.data_type = "FLOAT"; rj.inputs["Min"].default_value = 0.0; rj.inputs["Max"].default_value = 1.0
     L.new(gi.outputs["Seed"], rj.inputs["Seed"])
-    jm = N.new("ShaderNodeMath"); jm.operation = "MULTIPLY"; L.new(rj.outputs[1], jm.inputs[0]); L.new(gi.outputs["Jitter"], jm.inputs[1])
+    jm = N.new("ShaderNodeMath"); jm.operation = "MULTIPLY"; L.new(rj.outputs[0], jm.inputs[0]); L.new(gi.outputs["Jitter"], jm.inputs[1])
     add = N.new("ShaderNodeMath"); add.operation = "ADD"; L.new(div.outputs[0], add.inputs[0]); L.new(gi.outputs["Phase"], add.inputs[1])
     add2 = N.new("ShaderNodeMath"); add2.operation = "ADD"; L.new(add.outputs[0], add2.inputs[0]); L.new(jm.outputs[0], add2.inputs[1])
     fr = N.new("ShaderNodeMath"); fr.operation = "FRACT"; L.new(add2.outputs[0], fr.inputs[0])
@@ -457,10 +473,10 @@ def flow_group():
     sd2 = N.new("ShaderNodeMath"); sd2.operation = "ADD"; sd2.inputs[1].default_value = 7; L.new(gi.outputs["Seed"], sd2.inputs[0])
     L.new(sd2.outputs[0], ra.inputs["Seed"]); sd3 = N.new("ShaderNodeMath"); sd3.operation = "ADD"; sd3.inputs[1].default_value = 13
     L.new(gi.outputs["Seed"], sd3.inputs[0]); L.new(sd3.outputs[0], rr.inputs["Seed"])
-    sq = N.new("ShaderNodeMath"); sq.operation = "SQRT"; L.new(rr.outputs[1], sq.inputs[0])
+    sq = N.new("ShaderNodeMath"); sq.operation = "SQRT"; L.new(rr.outputs[0], sq.inputs[0])
     rad = N.new("ShaderNodeMath"); rad.operation = "MULTIPLY"; L.new(sq.outputs[0], rad.inputs[0]); L.new(gi.outputs["Radius"], rad.inputs[1])
-    cosn = N.new("ShaderNodeMath"); cosn.operation = "COSINE"; L.new(ra.outputs[1], cosn.inputs[0])
-    sinn = N.new("ShaderNodeMath"); sinn.operation = "SINE"; L.new(ra.outputs[1], sinn.inputs[0])
+    cosn = N.new("ShaderNodeMath"); cosn.operation = "COSINE"; L.new(ra.outputs[0], cosn.inputs[0])
+    sinn = N.new("ShaderNodeMath"); sinn.operation = "SINE"; L.new(ra.outputs[0], sinn.inputs[0])
     bin_ = N.new("ShaderNodeVectorMath"); bin_.operation = "CROSS_PRODUCT"; L.new(sc.outputs["Tangent"], bin_.inputs[0]); L.new(sc.outputs["Normal"], bin_.inputs[1])
     v1 = N.new("ShaderNodeVectorMath"); v1.operation = "SCALE"; L.new(sc.outputs["Normal"], v1.inputs[0]); L.new(cosn.outputs[0], v1.inputs["Scale"])
     v2 = N.new("ShaderNodeVectorMath"); v2.operation = "SCALE"; L.new(bin_.outputs[0], v2.inputs[0]); L.new(sinn.outputs[0], v2.inputs["Scale"])
@@ -471,7 +487,7 @@ def flow_group():
     # density: delete a random subset
     rd = N.new("FunctionNodeRandomValue"); rd.data_type = "FLOAT"; sd4 = N.new("ShaderNodeMath"); sd4.operation = "ADD"; sd4.inputs[1].default_value = 29
     L.new(gi.outputs["Seed"], sd4.inputs[0]); L.new(sd4.outputs[0], rd.inputs["Seed"])
-    gt = N.new("ShaderNodeMath"); gt.operation = "GREATER_THAN"; L.new(rd.outputs[1], gt.inputs[0]); L.new(gi.outputs["Density"], gt.inputs[1])
+    gt = N.new("ShaderNodeMath"); gt.operation = "GREATER_THAN"; L.new(rd.outputs[0], gt.inputs[0]); L.new(gi.outputs["Density"], gt.inputs[1])
     dl = N.new("GeometryNodeDeleteGeometry"); dl.domain = "POINT"; L.new(sp.outputs[0], dl.inputs["Geometry"]); L.new(gt.outputs[0], dl.inputs["Selection"])
     # streak instances aligned to the tangent
     ico = N.new("GeometryNodeMeshIcoSphere"); ico.inputs["Radius"].default_value = 1.0; ico.inputs["Subdivisions"].default_value = 1
@@ -495,8 +511,8 @@ def flow(name, pts, coll, mat, count=260, radius=0.018, size=0.005, stretch=3.5,
     ob = bpy.data.objects.new(name, cu); coll.objects.link(ob)
     md = ob.modifiers.new("flow", "NODES"); md.node_group = flow_group()
     ids = {it.name: it.identifier for it in md.node_group.interface.items_tree if getattr(it, "in_out", "") == "INPUT"}
-    md[ids["Count"]] = count; md[ids["Radius"]] = radius; md[ids["Size"]] = size; md[ids["Stretch"]] = stretch
-    md[ids["Seed"]] = seed; md[ids["Jitter"]] = jitter; md[ids["Material"]] = mat
+    for k, val in (("Count", count), ("Radius", radius), ("Size", size), ("Stretch", stretch), ("Seed", seed), ("Jitter", jitter), ("Material", mat)):
+        mod_set(md, ids[k], val)
     ob["ids"] = ids
     L = 0.0; P = [Vector(p) for p in pts]
     for a, b in zip(P, P[1:]): L += (b - a).length
@@ -504,11 +520,252 @@ def flow(name, pts, coll, mat, count=260, radius=0.018, size=0.005, stretch=3.5,
     return ob
 
 
+def mod_set(md, ident, val):
+    """Geometry-nodes modifier input (Blender 4.x: md[identifier]; 5.x: md.properties.inputs.<identifier>.value)."""
+    try:
+        md[ident] = val
+    except TypeError:
+        getattr(md.properties.inputs, ident).value = val
+
+
+def mod_key(ob, md, ident, frame):
+    try:
+        ob.keyframe_insert(f'modifiers["{md.name}"]["{ident}"]', frame=frame)
+    except (TypeError, RuntimeError):
+        getattr(md.properties.inputs, ident).keyframe_insert("value", frame=frame)
+
+
 def flow_keys(ob, speed_fn, density_fn, f0, f1, fps=30):
     """Per-frame keys: phase integrates speed (m/s) so particles never jump when the speed changes."""
     md = ob.modifiers["flow"]; ids = ob["ids"]; ph = 0.0
     for f in range(f0, f1 + 1):
-        md[ids["Phase"]] = ph; md[ids["Density"]] = density_fn(f)
-        ob.keyframe_insert(f'modifiers["flow"]["{ids["Phase"]}"]', frame=f)
-        ob.keyframe_insert(f'modifiers["flow"]["{ids["Density"]}"]', frame=f)
+        mod_set(md, ids["Phase"], ph); mod_set(md, ids["Density"], density_fn(f))
+        mod_key(ob, md, ids["Phase"], f); mod_key(ob, md, ids["Density"], f)
         ph += speed_fn(f) / fps / ob["length"]
+
+
+# ------------------------------------------------------------------ streamlines (thin flowing lines with fading tails)
+def stream_group():
+    """Streamlines along a path curve: thin glowing lines with fading tails gliding through the pipe section, like
+    smoke lines in a wind tunnel. Each streak keeps its own lane, speed and length; Phase moves them (integrated from
+    speed by flow_keys, so nothing jumps), Density fades whole streaks in/out. Tail/FadeIn/FadeOut are fractions of
+    the path length; R0/R1 scale the lane radius at the start/end (a plume widening out of a pipe: R1 > 1)."""
+    ng = bpy.data.node_groups.get("S3D_Stream")
+    if ng:
+        return ng
+    ng = bpy.data.node_groups.new("S3D_Stream", "GeometryNodeTree")
+    I = ng.interface
+    I.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    for nm, typ, dv in (("Count", "NodeSocketInt", 60), ("Phase", "NodeSocketFloat", 0.0), ("Density", "NodeSocketFloat", 1.0),
+                        ("Radius", "NodeSocketFloat", 0.02), ("Size", "NodeSocketFloat", 0.0015), ("Tail", "NodeSocketFloat", 0.2),
+                        ("FadeIn", "NodeSocketFloat", 0.05), ("FadeOut", "NodeSocketFloat", 0.1), ("Swirl", "NodeSocketFloat", 0.0),
+                        ("R0", "NodeSocketFloat", 1.0), ("R1", "NodeSocketFloat", 1.0),
+                        ("Seed", "NodeSocketInt", 0), ("Jitter", "NodeSocketFloat", 0.35), ("Resolution", "NodeSocketInt", 18)):
+        sk = I.new_socket(nm, in_out="INPUT", socket_type=typ); sk.default_value = dv
+    I.new_socket("Material", in_out="INPUT", socket_type="NodeSocketMaterial")
+    I.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    N, L = ng.nodes, ng.links
+    gi, go = N.new("NodeGroupInput"), N.new("NodeGroupOutput")
+
+    def M_(op, a=None, b=None, c=None, clamp=False):
+        n = N.new("ShaderNodeMath"); n.operation = op; n.use_clamp = clamp
+        for i, v in enumerate((a, b, c)):
+            if v is None:
+                continue
+            if isinstance(v, (int, float)):
+                n.inputs[i].default_value = v
+            else:
+                L.new(v, n.inputs[i])
+        return n.outputs[0]
+
+    def V_(op, a, b=None, scale=None):
+        n = N.new("ShaderNodeVectorMath"); n.operation = op
+        L.new(a, n.inputs[0])
+        if b is not None:
+            L.new(b, n.inputs[1])
+        if scale is not None:
+            L.new(scale, n.inputs["Scale"])
+        return n.outputs[0]
+
+    def R_(ident, add, lo=0.0, hi=1.0):
+        r = N.new("FunctionNodeRandomValue"); r.data_type = "FLOAT"
+        r.inputs["Min"].default_value = lo; r.inputs["Max"].default_value = hi
+        L.new(ident, r.inputs["ID"]); L.new(M_("ADD", gi.outputs["Seed"], float(add)), r.inputs["Seed"])
+        return r.outputs[0]
+
+    def smooth(x, x0, x1):
+        n = N.new("ShaderNodeMapRange"); n.interpolation_type = "SMOOTHSTEP"; n.clamp = True
+        for k, v in (("Value", x), ("From Min", x0), ("From Max", x1)):
+            if isinstance(v, (int, float)):
+                n.inputs[k].default_value = v
+            else:
+                L.new(v, n.inputs[k])
+        n.inputs["To Min"].default_value = 0.0; n.inputs["To Max"].default_value = 1.0
+        return n.outputs[0]
+
+    # one point per streak; its index is stored so streaks keep their identity when some are culled
+    pts = N.new("GeometryNodePoints"); L.new(gi.outputs["Count"], pts.inputs["Count"])
+    idx = N.new("GeometryNodeInputIndex").outputs[0]
+    st = N.new("GeometryNodeStoreNamedAttribute"); st.data_type = "FLOAT"; st.domain = "POINT"; st.inputs["Name"].default_value = "sid"
+    L.new(pts.outputs[0], st.inputs["Geometry"]); L.new(idx, st.inputs["Value"])
+    gone = M_("LESS_THAN", gi.outputs["Density"], M_("SUBTRACT", R_(idx, 29, 0.04, 0.96), 0.07))
+    dl = N.new("GeometryNodeDeleteGeometry"); dl.domain = "POINT"
+    L.new(st.outputs[0], dl.inputs["Geometry"]); L.new(gone, dl.inputs["Selection"])
+    # each streak is a polyline of Resolution points (tail -> head)
+    line = N.new("GeometryNodeCurvePrimitiveLine")
+    rs = N.new("GeometryNodeResampleCurve"); L.new(line.outputs[0], rs.inputs["Curve"]); L.new(gi.outputs["Resolution"], rs.inputs["Count"])
+    iop = N.new("GeometryNodeInstanceOnPoints"); L.new(dl.outputs[0], iop.inputs["Points"]); L.new(rs.outputs[0], iop.inputs["Instance"])
+    real = N.new("GeometryNodeRealizeInstances"); L.new(iop.outputs[0], real.inputs["Geometry"])
+    na = N.new("GeometryNodeInputNamedAttribute"); na.data_type = "FLOAT"; na.inputs["Name"].default_value = "sid"
+    sid = na.outputs["Attribute"]
+    j = N.new("GeometryNodeSplineParameter").outputs["Factor"]
+    # head position along the path: golden-ratio spread + jitter, per-streak speed; tail trails behind it
+    off = M_("FRACT", M_("MULTIPLY_ADD", sid, 0.6180339887, M_("MULTIPLY", R_(sid, 3), gi.outputs["Jitter"])))
+    head = M_("FRACT", M_("MULTIPLY_ADD", gi.outputs["Phase"], R_(sid, 5, 0.86, 1.14), off))
+    tl = M_("MULTIPLY", gi.outputs["Tail"], R_(sid, 11, 0.65, 1.35))
+    u = M_("SUBTRACT", head, M_("MULTIPLY", M_("SUBTRACT", 1.0, j), tl))
+    uc = M_("ADD", u, 0.0, clamp=True)
+    sc = N.new("GeometryNodeSampleCurve"); sc.mode = "FACTOR"; sc.use_all_curves = True
+    L.new(gi.outputs["Geometry"], sc.inputs["Curves"]); L.new(uc, sc.inputs["Factor"])
+    T_, Nn, P_ = sc.outputs["Tangent"], sc.outputs["Normal"], sc.outputs["Position"]
+    B_ = V_("CROSS_PRODUCT", T_, Nn)
+    ang = M_("MULTIPLY_ADD", uc, gi.outputs["Swirl"], R_(sid, 17, 0.0, 6.2831853))
+    lane = M_("MULTIPLY", M_("SQRT", R_(sid, 23, 0.02, 1.0)), gi.outputs["Radius"])
+    prof = M_("ADD", gi.outputs["R0"], M_("MULTIPLY", uc, M_("SUBTRACT", gi.outputs["R1"], gi.outputs["R0"])))
+    rad = M_("MULTIPLY", lane, prof)
+    ov = V_("ADD", V_("SCALE", Nn, scale=M_("COSINE", ang)), V_("SCALE", B_, scale=M_("SINE", ang)))
+    pos = V_("ADD", P_, V_("SCALE", ov, scale=rad))
+    sp = N.new("GeometryNodeSetPosition"); L.new(real.outputs[0], sp.inputs["Geometry"]); L.new(pos, sp.inputs["Position"])
+    # opacity: fading tail, soft entry/exit at the path ends, density fade per streak, per-streak brightness
+    a = M_("POWER", j, 2.1)
+    a = M_("MULTIPLY", a, smooth(u, 0.0, gi.outputs["FadeIn"]))
+    a = M_("MULTIPLY", a, smooth(M_("SUBTRACT", 1.0, u), 0.0, gi.outputs["FadeOut"]))
+    a = M_("MULTIPLY", a, M_("MULTIPLY_ADD", M_("SUBTRACT", gi.outputs["Density"], R_(sid, 29, 0.04, 0.96)), 7.0, 0.5, clamp=True))
+    a = M_("MULTIPLY", a, R_(sid, 31, 0.45, 1.0))
+    sa = N.new("GeometryNodeStoreNamedAttribute"); sa.data_type = "FLOAT"; sa.domain = "POINT"; sa.inputs["Name"].default_value = "a"
+    L.new(sp.outputs[0], sa.inputs["Geometry"]); L.new(a, sa.inputs["Value"])
+    circ = N.new("GeometryNodeCurvePrimitiveCircle"); circ.inputs["Resolution"].default_value = 6
+    L.new(gi.outputs["Size"], circ.inputs["Radius"])
+    c2m = N.new("GeometryNodeCurveToMesh"); L.new(sa.outputs[0], c2m.inputs["Curve"]); L.new(circ.outputs["Curve"], c2m.inputs["Profile Curve"])
+    if "Scale" in c2m.inputs:
+        L.new(M_("MULTIPLY_ADD", j, 0.7, 0.3), c2m.inputs["Scale"])          # thin tail, fuller head
+    sm = N.new("GeometryNodeSetMaterial"); L.new(c2m.outputs[0], sm.inputs["Geometry"]); L.new(gi.outputs["Material"], sm.inputs["Material"])
+    L.new(sm.outputs[0], go.inputs[0])
+    return ng
+
+
+def stream_mat(name, color, strength=3.0, core_white=0.08, opacity=0.8):
+    """Glowing streak material: opacity and brightness from the 'a' attribute; soft edges across the line (bright
+    centre, see-through rim) so streaks read as light, not solid tubes; the head runs slightly whiter."""
+    m, nt, b, out = _mat(name); nt.nodes.remove(b)
+    N_, L_ = nt.nodes, nt.links
+    at = N_.new("ShaderNodeAttribute"); at.attribute_name = "a"
+    lw = N_.new("ShaderNodeLayerWeight"); lw.inputs["Blend"].default_value = 0.5
+    inv = N_.new("ShaderNodeMath"); inv.operation = "SUBTRACT"; inv.inputs[0].default_value = 1.0; L_.new(lw.outputs["Facing"], inv.inputs[1])
+    soft = N_.new("ShaderNodeMath"); soft.operation = "POWER"; soft.inputs[1].default_value = 1.6; L_.new(inv.outputs[0], soft.inputs[0])
+    al = N_.new("ShaderNodeMath"); al.operation = "MULTIPLY"; L_.new(at.outputs["Fac"], al.inputs[0]); L_.new(soft.outputs[0], al.inputs[1])
+    al2 = N_.new("ShaderNodeMath"); al2.operation = "MULTIPLY"; al2.use_clamp = True; al2.inputs[1].default_value = opacity; L_.new(al.outputs[0], al2.inputs[0])
+    p4 = N_.new("ShaderNodeMath"); p4.operation = "POWER"; p4.inputs[1].default_value = 4.0; L_.new(at.outputs["Fac"], p4.inputs[0])
+    wk = N_.new("ShaderNodeMath"); wk.operation = "MULTIPLY"; wk.inputs[1].default_value = core_white; L_.new(p4.outputs[0], wk.inputs[0])
+    mix = N_.new("ShaderNodeMix"); mix.data_type = "RGBA"
+    mix.inputs["A"].default_value = (*color[:3], 1); mix.inputs["B"].default_value = (1, 1, 1, 1); L_.new(wk.outputs[0], mix.inputs["Factor"])
+    em = N_.new("ShaderNodeEmission"); em.inputs["Strength"].default_value = strength; L_.new(mix.outputs["Result"], em.inputs["Color"])
+    tr = N_.new("ShaderNodeBsdfTransparent")
+    mx = N_.new("ShaderNodeMixShader"); L_.new(al2.outputs[0], mx.inputs[0])
+    L_.new(tr.outputs[0], mx.inputs[1]); L_.new(em.outputs[0], mx.inputs[2]); L_.new(mx.outputs[0], out.inputs[0])
+    try:
+        m.cycles.emission_sampling = "NONE"        # thin streaks are not lights: no extra noise
+    except Exception:
+        pass
+    return m
+
+
+def stream(name, pts, coll, mat, count=60, radius=0.018, size=0.0015, tail=0.18, fade_in=0.04, fade_out=0.06, swirl=0.0,
+           r0=1.0, r1=1.0, seed=0, jitter=0.35, res=18):
+    """Streamlines along a smooth curve through `pts` (metres). Animate with flow_keys() like flow()."""
+    cu = bpy.data.curves.new(name, "CURVE"); cu.dimensions = "3D"
+    sp = cu.splines.new("BEZIER"); sp.bezier_points.add(len(pts) - 1)
+    for bp, p in zip(sp.bezier_points, pts):
+        bp.co = p; bp.handle_left_type = bp.handle_right_type = "AUTO"
+    ob = bpy.data.objects.new(name, cu); coll.objects.link(ob)
+    length = sp.calc_length() if hasattr(sp, "calc_length") else sum((Vector(b) - Vector(a)).length for a, b in zip(pts, pts[1:]))
+    md = ob.modifiers.new("flow", "NODES"); md.node_group = stream_group()
+    ids = {it.name: it.identifier for it in md.node_group.interface.items_tree if getattr(it, "in_out", "") == "INPUT"}
+    for k, val in (("Count", count), ("Radius", radius), ("Size", size), ("Tail", tail / length), ("FadeIn", max(1e-3, fade_in / length)),
+                   ("FadeOut", max(1e-3, fade_out / length)), ("Swirl", swirl), ("R0", r0), ("R1", r1), ("Seed", seed),
+                   ("Jitter", jitter), ("Resolution", res), ("Material", mat)):
+        mod_set(md, ids[k], val)
+    ob["ids"] = ids; ob["length"] = length
+    ob["mid"] = sum((Vector(p) for p in pts), Vector()) / len(pts)
+    for attr in ("visible_shadow",):
+        if hasattr(ob, attr):
+            setattr(ob, attr, False)
+    return ob
+
+
+def stream_width_keys(streams, shots, px=5.0, res_long=1920, lo=0.0004, hi=0.025):
+    """Keep streamlines about `px` pixels thick (radius, full resolution) in every shot: one constant key per shot
+    from the shot camera's distance to each stream (close-ups get fine lines, wide shots don't lose them).
+    shots: [(camera_name, scene_name, f0, f1)]."""
+    prefs = bpy.context.preferences.edit; old = prefs.keyframe_new_interpolation_type
+    prefs.keyframe_new_interpolation_type = "CONSTANT"
+    try:
+        for name, scn, f0, f1 in sorted(shots, key=lambda s: s[2]):
+            sc = bpy.data.scenes[scn]; sc.frame_set((f0 + f1) // 2)
+            dg = sc.view_layers[0].depsgraph
+            ce = bpy.data.objects[name].evaluated_get(dg); cpos = ce.matrix_world.translation; lens = ce.data.lens
+            for ob in streams:
+                if "mid" not in ob:
+                    continue
+                d = (ob.evaluated_get(dg).matrix_world @ Vector(ob["mid"]) - cpos).length
+                r = max(lo, min(hi, px * d * 36.0 / (lens * res_long)))
+                md = ob.modifiers["flow"]; ident = ob["ids"]["Size"]
+                mod_set(md, ident, r); mod_key(ob, md, ident, f0)
+    finally:
+        prefs.keyframe_new_interpolation_type = old
+
+
+# ------------------------------------------------------------------ see-through pipes (to show the flow inside)
+def xray_group(name="S3D_PartXray", color=(0.55, 0.85, 1.0)):
+    """Shared node group: 'xray' 0 = solid metal .. 1 = glassy ghost with a fresnel rim. Key with xray_keys()."""
+    ng = bpy.data.node_groups.get(name)
+    if ng:
+        return ng
+    ng = bpy.data.node_groups.new(name, "ShaderNodeTree")
+    ng.interface.new_socket("Shader", in_out="INPUT", socket_type="NodeSocketShader")
+    ng.interface.new_socket("Shader", in_out="OUTPUT", socket_type="NodeSocketShader")
+    N, L = ng.nodes, ng.links
+    gi, go = N.new("NodeGroupInput"), N.new("NodeGroupOutput")
+    val = N.new("ShaderNodeValue"); val.name = "xray"; val.outputs[0].default_value = 0.0
+    lw = N.new("ShaderNodeLayerWeight"); lw.inputs["Blend"].default_value = 0.3
+    pw = N.new("ShaderNodeMath"); pw.operation = "POWER"; pw.inputs[1].default_value = 1.8; L.new(lw.outputs["Facing"], pw.inputs[0])
+    st = N.new("ShaderNodeMath"); st.operation = "MULTIPLY_ADD"; st.inputs[1].default_value = 1.6; st.inputs[2].default_value = 0.03
+    L.new(pw.outputs[0], st.inputs[0])
+    em = N.new("ShaderNodeEmission"); em.inputs["Color"].default_value = (*color, 1); L.new(st.outputs[0], em.inputs["Strength"])
+    tr = N.new("ShaderNodeBsdfTransparent")
+    a = N.new("ShaderNodeMath"); a.operation = "MULTIPLY_ADD"; a.inputs[1].default_value = 0.55; a.inputs[2].default_value = 0.06
+    L.new(pw.outputs[0], a.inputs[0])
+    ghost = N.new("ShaderNodeMixShader"); L.new(a.outputs[0], ghost.inputs[0]); L.new(tr.outputs[0], ghost.inputs[1]); L.new(em.outputs[0], ghost.inputs[2])
+    mix = N.new("ShaderNodeMixShader"); L.new(val.outputs[0], mix.inputs[0]); L.new(gi.outputs[0], mix.inputs[1]); L.new(ghost.outputs[0], mix.inputs[2])
+    L.new(mix.outputs[0], go.inputs[0])
+    return ng
+
+
+def xray_apply(mats, name="S3D_PartXray"):
+    ng = xray_group(name)
+    for m in mats:
+        nt = m.node_tree; out = next(n for n in nt.nodes if n.type == "OUTPUT_MATERIAL")
+        if not out.inputs[0].links:
+            continue
+        src = out.inputs[0].links[0].from_socket
+        if src.node.type == "GROUP" and src.node.node_tree == ng:
+            continue
+        g = nt.nodes.new("ShaderNodeGroup"); g.node_tree = ng
+        nt.links.new(src, g.inputs[0]); nt.links.new(g.outputs[0], out.inputs[0])
+    return ng
+
+
+def xray_keys(keys, name="S3D_PartXray"):
+    v = bpy.data.node_groups[name].nodes["xray"].outputs[0]
+    for f, x in keys:
+        v.default_value = x; v.keyframe_insert("default_value", frame=f)

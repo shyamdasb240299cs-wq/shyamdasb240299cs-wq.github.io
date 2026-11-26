@@ -76,15 +76,14 @@ class Road:
         r_end = max(0.0, self.spu[0] - u, u - self.spu[-1])
         valley = v * self.cut_side < 0 and r_end < 200.0
         n = self.noise
-        if valley:
-            k = core.smooth((abs(v) - 500.0) / 3500.0)
-            return k * (self.valley_drop * 0.85 - 10.0) + 8.0 * n.fbm(u / 300.0 + v / 410.0 + 7, 3) * core.smooth(abs(v) / 800.0)
+        if valley:     # a wide low valley floor: the eye travels over it to the real horizon of the panorama
+            return -22.0 * core.smooth((abs(v) - 300.0) / 1500.0) + 6.0 * n.fbm(u / 300.0 + v / 410.0 + 7, 3) * core.smooth(abs(v) / 800.0)
         r = max(abs(v), r_end * 1.2)
         if r < 420.0:
             return 0.0
         k = core.smooth((r - 420.0) / 1400.0)
         ridge = 1.0 - abs(n.fbm(u / 700.0 + (13 if v > 0 else 71), 4) * 0.8 + n(v / 900.0 + 5) * 0.4)
-        return k * (180.0 + 420.0 * max(0.0, ridge) ** 2.0)
+        return k * (120.0 + 260.0 * max(0.0, ridge) ** 2.0)
 
     def _profile(self, s, d, zr):
         e = self.edge(); side = 1 if d * self.cut_side > 0 else -1; a = abs(d) - e
@@ -481,12 +480,12 @@ def scatter(R, coll, lib, center, size, count, seed=7, kinds=("tree_fir_c", "tre
 def canopy_material(name="far_forest"):
     """Forest seen from far away: dark crowns with sunlit tops and gaps (procedural), used beyond the instanced trees."""
     m, nt, b = _new_mat(name); N, L = nt.nodes, nt.links
-    tc = N.new("ShaderNodeTexCoord"); vo = N.new("ShaderNodeTexVoronoi"); vo.inputs["Scale"].default_value = 0.22
+    tc = N.new("ShaderNodeTexCoord"); vo = N.new("ShaderNodeTexVoronoi"); vo.inputs["Scale"].default_value = 0.16
     L.new(tc.outputs["Object"], vo.inputs[0])
     nz = N.new("ShaderNodeTexNoise"); nz.inputs["Scale"].default_value = 0.01; nz.inputs["Detail"].default_value = 4
     L.new(tc.outputs["Object"], nz.inputs[0])
     ramp = N.new("ShaderNodeValToRGB"); el = ramp.color_ramp.elements
-    el[0].position = 0.0; el[0].color = (0.035, 0.05, 0.022, 1); el[1].position = 0.9; el[1].color = (0.006, 0.01, 0.006, 1)
+    el[0].position = 0.0; el[0].color = (0.03, 0.045, 0.02, 1); el[1].position = 0.75; el[1].color = (0.004, 0.007, 0.004, 1)
     L.new(vo.outputs["Distance"], ramp.inputs[0])
     mx = N.new("ShaderNodeMix"); mx.data_type = "RGBA"; mx.blend_type = "MULTIPLY"; mx.inputs[0].default_value = 1.0
     r2 = N.new("ShaderNodeMapRange"); r2.inputs["To Min"].default_value = 0.6; r2.inputs["To Max"].default_value = 1.5
@@ -517,7 +516,8 @@ def build(R, coll, tex, nature=None, s0=-150, s1=450, terrain_center=None, terra
     if nature:
         from . import nature as NA
         lib = NA.Lib(nature)
-        out["eco"] = NA.ecosystem(R, lib, coll, c, terrain_size, [near, ter], seed=seed, trees=trees, s_range=(s0 + 2, s1 - 2))
+        out["eco"] = NA.ecosystem(R, lib, coll, c, terrain_size, [near, ter], seed=seed, trees=trees, s_range=(s0 + 2, s1 - 2),
+                                  max_road=700.0)
         NA.enhance(lib, aerial=add_aerial)
     for m in (tm, fm, am, gm):
         add_aerial(m)

@@ -50,6 +50,7 @@ Reference study: `analyze <video.mp4>` → every native frame → `report.md` + 
 | directing actions, faces, gestures, mocap clips | `reference/acting.md` |
 | choosing shots / camera moves / composition | `reference/camera.md` |
 | showing HOW something works (x-ray, cutaway, gears, circuits, anatomy) | `reference/explainers.md` |
+| cars, roads, engines, turbo kits, anything assembled/taken apart on screen | `reference/machines.md` |
 | free actors / models / sounds / music, licences | `reference/assets.md` |
 | materials, light, look | `reference/look.md` |
 | GPU tiers, render times, preview→final, resume | `reference/render.md` |

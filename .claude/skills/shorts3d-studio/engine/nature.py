@@ -129,8 +129,8 @@ def ecosystem(R, lib, coll, center, size, terrain, seed=3, trees=9000, max_road=
         if not loc:
             continue
         s, d, a, cut = loc
-        if not cut and a < 5.5:          # keep the low sun on the road: no tall trees right below the rail
-            continue
+        if not cut and a < 24.0:         # open grassy fill slope below the rail: the low sun reaches the road and
+            continue                     # the eye travels over the canopy into the valley (broad vista)
         if a > max_road * (0.55 + 0.45 * rnd.random()):
             continue
         clump = core.smooth((n.fbm(x / 48.0 + 3.1, 3) * 0.5 + n(y / 61.0 + 9.3) * 0.5 + 0.35) / 0.9)

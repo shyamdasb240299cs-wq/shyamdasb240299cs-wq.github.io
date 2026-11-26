@@ -239,6 +239,18 @@ class Kit:
         r = _root("T1_wastegate", self.c, Matrix.Identity(4))
         wg = PT.wastegate("T1_wastegate_body", self.c, self.M)
         _adopt(wg, r, Matrix.Translation(pad_c + Z * (0.046 + GAP)) @ Matrix.Diagonal((0.62, 0.62, 0.8, 1)))
+        # dump tube: the bled exhaust leaves the valve body on its outboard side and rejoins the downpipe AFTER the turbine
+        # (how an external wastegate is plumbed). Part of the wastegate unit; it seats on a flange on the downpipe (GAP).
+        o = pad_c + Z * (0.046 + GAP); sx = -1.0 if o.x < 0 else 1.0; rb = 0.026 * 0.62
+        p0 = Vector((o.x + sx * (rb + GAP), o.y, o.z + 0.018))
+        c_dp = Vector((sx * 0.42, -0.30, -0.10))                                 # a downpipe control point (on its centreline)
+        t_dp = (Vector((sx * 0.36, -0.10, -0.12)) - Vector((sx * 0.47, -0.47, -0.07))).normalized()
+        n_dp = Vector((sx * 0.45, 0.0, 0.89)); n_dp = (n_dp - n_dp.dot(t_dp) * t_dp).normalized()
+        pe = c_dp + n_dp * (0.034 + GAP)
+        mids = [Vector((sx * 0.462, o.y + 0.03, o.z - 0.05)), Vector((sx * 0.47, -0.37, -0.03))]
+        self.pipe("T1_wastegate_dump", mids, 0.0095, r, self.M["hot"], start=(p0, Vector((-sx, 0, 0))), end=(pe, -n_dp),
+                  lead=0.04, fl_start=False, fl_end=True)
+        self.wg_path = [pad_c, o + Z * 0.018, p0, p0 + Vector((sx * 0.04, 0, 0))] + mids + [pe + n_dp * 0.04, pe, c_dp]
         self._place("T1_wastegate", r, Matrix.Identity(4))
         r = _root("charge_pipe", self.c, Matrix.Identity(4))
         T = self.T - Y * GAP

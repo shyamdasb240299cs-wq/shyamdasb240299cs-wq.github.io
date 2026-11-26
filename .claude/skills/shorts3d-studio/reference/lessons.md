@@ -53,6 +53,15 @@ still decide in `shots.yaml`. Check here before writing new bpy code - most "new
 | Preview and final frames mixed in one MP4 | re-render of some shots in another quality | frames tagged review/final; changing class wipes; EEVEE final + Cycles hero shots may mix |
 | Render killed (sleep, crash) | long laptop renders | `build ... --resume` continues where it stopped |
 | Context/tokens burned re-reading old videos | no memory | CHANNEL.md is the memory; read only it + the current video folder |
+| Flow looks like bubbles / fake | particle blobs | streamlines (`PT.stream`) with fading tails, `stream_width_keys` per shot |
+| Spinning wheel strobes / runs backwards | 1-9 rev/s at 30 fps | SLOW ≤0.9 or FAST ≥12 rev/s + motion blur; quick transitions |
+| Loop freezes or hitches at the seam (moving car) | last frame = first position, speed/wheel/pitch jump | end one frame of travel before S0, same speed, `spin_start`, `noise_offset=-NF` |
+| Parked car creeps in a later shot | drive keys ended early, interpolation to the next drive | key the hold until the scene cut |
+| Hood/strut bar pass through the body | imported parts embedded at rest | lift off the seat straight first (15 mm / 10 cm), QA with the seat-transition rule |
+| Engine running while being pulled out | flows/pistons keyed for all frames | engine off from the stop until it is shown running again |
+| A described mechanism does nothing | static part | animate it (wastegate valve opens, bypass flow through its dump tube) |
+| Engine louder than the narrator | raw recording levels | engine bed ~8 dB under the voice, duck, check speech-to-text WER on the mix |
+| Studio frames rendered at the wrong time | `render(scene=)` uses the context scene's frame | set both frames before rendering |
 
 ## How the motion system thinks (so you can extend it without breaking contacts)
 - All torso poses are **armature-space deltas** `D[bone]` (rotation from rest). `chain_deltas()` builds them;

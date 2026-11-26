@@ -390,7 +390,7 @@ def _gauges(car, cluster, coll):
                 dial.data.uv_layers[0].data[li].uv = (co.x / (2 * r) + 0.5, co.y / (2 * r) + 0.5)
         m = bpy.data.materials.new(f"{car.name}_dial_{kind}"); nt, b, out = _bsdf(m)
         tex = nt.nodes.new("ShaderNodeTexImage"); tex.image = _dial_image(f"dial_{kind}", kind)
-        em = nt.nodes.new("ShaderNodeEmission"); em.inputs["Strength"].default_value = 1.6
+        em = nt.nodes.new("ShaderNodeEmission"); em.inputs["Strength"].default_value = 3.0
         nt.links.new(tex.outputs["Color"], em.inputs["Color"]); nt.links.new(em.outputs[0], out.inputs[0])
         dial.data.materials.append(m)
         _parent_keep(dial, car.body)
@@ -493,10 +493,13 @@ def speed_profile(speeds, s0, f0, f1, fps=30):
 
 def drive(car, path, speeds, s0=0.0, frames=None, fps=30, lateral=0.0, pitch_k=0.011, roll_k=0.012, ratio=14.0,
           idle_rpm=900, gears=(0, 3.2, 2.1, 1.5, 1.15, 0.92), final=3.55, wheelspin=None, throttle=None, seed=1,
-          max_tilt=0.07):
+          max_tilt=0.07, spin_start=None, noise_offset=0):
     """Keyframe the whole car for every frame in `frames` (f0, f1) (default: first..last speed key).
     speeds: [(frame, m/s)] eased between keys; distance integrated from s0 along the path.
-    wheelspin: [(f0, f1, extra_rad_per_s)] rear tyre slip (launch). throttle: [(frame, 0..1)] pedal/rpm hint."""
+    wheelspin: [(f0, f1, extra_rad_per_s)] rear tyre slip (launch). throttle: [(frame, 0..1)] pedal/rpm hint.
+    spin_start: {wheel: angle} to continue wheel rotation from another drive (seamless loops); noise_offset shifts the
+    road-texture noise clock (use -NF on the payoff drive of a looping video so its last frame flows into frame 0).
+    Returns frames, s, v and the wheel angles on the first/last frame ("spin_first", "spin_last")."""
     f_first, f_last = frames or (sorted(speeds)[0][0], sorted(speeds)[-1][0])
     frames = list(range(f_first, f_last + 1)); dt = 1.0 / fps
     S, Vv = speed_profile(speeds, s0, f_first, f_last, fps)
@@ -506,7 +509,8 @@ def drive(car, path, speeds, s0=0.0, frames=None, fps=30, lateral=0.0, pitch_k=0
     cl = lambda x: max(-max_tilt, min(max_tilt, x))
     pitch = _spring([cl(-pitch_k * a) for a in A], dt); roll = _spring([cl(-roll_k * a) for a in lat], dt)
     noise = core.Noise1D(seed)
-    spin_acc = {k: 0.0 for k in car.wheels}
+    spin_acc = {k: (spin_start or {}).get(k, 0.0) for k in car.wheels}
+    spin_first = None
     thr_keys = sorted(throttle or [])
     def thr(f):
         if not thr_keys: return 0.6
@@ -518,9 +522,10 @@ def drive(car, path, speeds, s0=0.0, frames=None, fps=30, lateral=0.0, pitch_k=0
         M = frame_matrix(path, s, lateral)
         car.root.matrix_world = M; car.root.keyframe_insert("location", frame=f); car.root.rotation_mode = "QUATERNION"
         car.root.rotation_quaternion = M.to_quaternion(); car.root.keyframe_insert("rotation_quaternion", frame=f)
-        hz = 0.004 * (noise(f / fps * 3.1) if noise else 0.0)     # road texture through the springs
+        fn = f + noise_offset
+        hz = 0.004 * (noise(fn / fps * 3.1) if noise else 0.0)    # road texture through the springs
         car.body.rotation_mode = "XYZ"
-        car.body.rotation_euler = (pitch[i] + 0.0015 * (noise(f / fps * 2.3 + 7) if noise else 0), roll[i], 0)
+        car.body.rotation_euler = (pitch[i] + 0.0015 * (noise(fn / fps * 2.3 + 7) if noise else 0), roll[i], 0)
         car.body.location = (0, 0, 0.5 + hz)
         car.body.keyframe_insert("rotation_euler", frame=f); car.body.keyframe_insert("location", frame=f)
         k_ = path.curvature(s + car.wheelbase / 2)
@@ -537,6 +542,8 @@ def drive(car, path, speeds, s0=0.0, frames=None, fps=30, lateral=0.0, pitch_k=0
                         extra = rate * math.sin(math.pi * (f - f0) / max(1, f1 - f0)) * dt
             spin_acc[k] += v * dt / w["r"] + extra
             w["spin"].rotation_euler = (spin_acc[k], 0, 0); w["spin"].keyframe_insert("rotation_euler", frame=f)
+        if spin_first is None:
+            spin_first = dict(spin_acc)
             # suspension: body pitch/roll compress the corners (wheels stay on the road, hub travels in the arch)
         sw = car.parts.get("steer_wheel")
         if sw:
@@ -556,7 +563,8 @@ def drive(car, path, speeds, s0=0.0, frames=None, fps=30, lateral=0.0, pitch_k=0
     for ob in [car.root, car.body] + [w[k] for w in car.wheels.values() for k in ("steer", "spin")] + list(car.parts.values()) + list(car.needles.values()):
         if ob.animation_data and ob.animation_data.action:
             _linear(ob.animation_data.action)
-    return {"frames": frames, "s": S, "v": Vv}
+    return {"frames": frames, "s": S, "v": Vv, "spin_first": spin_first, "spin_last": dict(spin_acc),
+            "radius": {k: w["r"] for k, w in car.wheels.items()}}
 
 
 def _linear(action):
