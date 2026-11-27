@@ -29,6 +29,12 @@ def load_actors(sc, keys, fps, frames, seed=1, cheer_times=(), lite=True):
     for i, key in enumerate(keys):
         rig = EB.load_character(f"a{i:02d}", {"char": key}, paths, {})
         coll = rig.users_collection[0]
+        for o in coll.objects:                               # textures whose path still points at the authoring machine
+            for mat in (o.data.materials if o.type == "MESH" else []):
+                for n in (mat.node_tree.nodes if mat and mat.node_tree else []):
+                    if n.type == "TEX_IMAGE" and n.image and not os.path.exists(bpy.path.abspath(n.image.filepath)):
+                        hit = glob.glob(os.path.join(HOME, "rocketbox", "tex_*", os.path.basename(n.image.filepath.replace("\\", "/"))))
+                        if hit: n.image.filepath = hit[0]; n.image.reload()
         if lite:   # preview on CPU: no subdivision, no face morph data, 1K textures (the GPU final keeps them all)
             for o in coll.objects:
                 if o.type != "MESH": continue

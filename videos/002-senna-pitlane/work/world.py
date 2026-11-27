@@ -525,6 +525,8 @@ def build_barriers(W, radius=700.0):
             for i in range(len(P) - 1):
                 for c in range(3):
                     a = base + i * 4 + c; wall_F.append((a, a + 4, a + 5, a + 1))
+            e = base + (len(P) - 1) * 4                       # solid concrete end caps (an open end shows a black void)
+            wall_F += [(base + 3, base + 2, base + 1, base), (e, e + 1, e + 2, e + 3)]
         elif kind == "barrier=tyres":
             P = _line_pts(W, w["pts"], 0.62); t, nrm = _frame(P[:, :2])
             for i in range(len(P)):

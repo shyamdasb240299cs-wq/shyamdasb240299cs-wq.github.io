@@ -523,12 +523,12 @@ def cam_pose(cut, fv):
         cpos, _ = car_xy_fwd(0, cut, fv)
         passed = 0.0 if cpos is None else _sm(6.0, -6.0, (cpos - L).dot(EAST))
         return L, base.lerp(tgt + Vector((0, 0, 0.6)), passed), 21.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.05, 1.2)
-    if name == "pit_side":                   # long-lens TV pan from the grandstand side of the track
-        P = R["Wheatcroft Straight"]["P"]; i = 230; t, n = world._frame(P[:, :2])
-        base = P[i, :2] - n[i] * 21.0
-        L = V3(base[0], base[1], 6.0)
+    if name == "pit_side":                   # long lens from the far end of the pit lane (garage side): he comes flat out at us
+        # (the lane sits ~1.2 m below the straight here, so a camera across the track only sees the pit wall)
+        cend, _ = car_xy_fwd(0, cut, f1 + 16)
+        L = cend - BN * 4.5; zr = road_z(L.x, L.y, cend.z); L.z = (zr if zr is not None else W.pit_zf(L)) + 1.6
         tgt = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.1)
-        return L, tgt + Vector((0, 0, 0.5)), 160.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.015, 0.9)
+        return L, tgt + Vector((0, 0, 0.45)), 160.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.02, 0.8)
     if name == "rise":                       # drone climbs over the pit lane to the top-down map
         k = ss(0.0, 1.0, u)
         L0 = V3(-40, 52, 24.0); T0_ = V3(60, 15, 0.0)
@@ -546,8 +546,8 @@ def cam_pose(cut, fv):
         L = L0.lerp(L1, k); L.z = L1.z + (L0.z - L1.z) * ((1 - k) ** 2.0)
         q = look_quat(L0, T0_, up0).slerp(look_quat(L1, T1), ss(0.0, 0.85, u))
         return L, q, lens0 + (30.0 - lens0) * k, None, ("drone", 0.05 * k, 0.05 * k, 0.3)
-    if name == "track_side":                 # TV camera outside Redgate, pans as he rejoins and turns in
-        L = V3(-338, 118, 3.2)
+    if name == "track_side":                 # TV camera on a scaffold outside Redgate (high enough to see over the crest)
+        L = V3(-338, 118, 6.2)
         tgt = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.25, shift=-0.06)
         return L, tgt + Vector((0, 0, 0.5)), 70.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.03, 0.9)
     if name == "hero_slow":                  # super slow-motion camera at track level, long lens, car coming at it
@@ -944,8 +944,14 @@ def build_rain(n=26000, box=(46.0, 46.0, 26.0), speed=8.5, wind=(1.4, 0.6)):
     comb = G.new("ShaderNodeCombineXYZ"); GL.new(X, comb.inputs[0]); GL.new(Y, comb.inputs[1]); GL.new(Z, comb.inputs[2])
     setp = G.new("GeometryNodeSetPosition"); GL.new(m2p.outputs[0], setp.inputs["Geometry"]); GL.new(comb.outputs[0], setp.inputs["Position"])
     # drop the drops right at the lens (they would be huge blurs)
-    dist = G.new("ShaderNodeVectorMath"); dist.operation = "DISTANCE"; GL.new(comb.outputs[0], dist.inputs[0]); GL.new(cam.outputs["Location"], dist.inputs[1])
-    near = m_("LESS_THAN", dist.outputs["Value"], 1.6)
+    # (fields are evaluated on the geometry the Delete node receives: use its own, already moved, positions)
+    pos2 = G.new("GeometryNodeInputPosition")
+    dist = G.new("ShaderNodeVectorMath"); dist.operation = "DISTANCE"; GL.new(pos2.outputs[0], dist.inputs[0]); GL.new(cam.outputs["Location"], dist.inputs[1])
+    nv = G.new("ShaderNodeValue"); nv.name = "near_clip"; nv.outputs[0].default_value = 1.6
+    dr = nv.outputs[0].driver_add("default_value").driver; dr.type = "SCRIPTED"
+    v_ = dr.variables.new(); v_.name = "lens"; v_.targets[0].id_type = "CAMERA"; v_.targets[0].id = CAM.data; v_.targets[0].data_path = "lens"
+    dr.expression = "max(1.6, lens * 0.08)"                              # 21 mm -> 1.7 m, 70 mm -> 5.6 m, 160 mm -> 12.8 m
+    near = m_("LESS_THAN", dist.outputs["Value"], nv.outputs[0])         # drops a real lens would blur away (driven by focal length)
     dele = G.new("GeometryNodeDeleteGeometry"); dele.domain = "POINT"; GL.new(setp.outputs[0], dele.inputs["Geometry"]); GL.new(near, dele.inputs["Selection"])
     oi = G.new("GeometryNodeObjectInfo"); oi.inputs[0].default_value = streak
     iop = G.new("GeometryNodeInstanceOnPoints"); GL.new(dele.outputs[0], iop.inputs["Points"]); GL.new(oi.outputs["Geometry"], iop.inputs["Instance"])
@@ -956,6 +962,9 @@ def build_rain(n=26000, box=(46.0, 46.0, 26.0), speed=8.5, wind=(1.4, 0.6)):
     md = po.modifiers.new("rain", "NODES"); md.node_group = ng
     try: po.cycles.use_motion_blur = False
     except Exception: pass
+    for v in ("visible_shadow", "visible_diffuse", "visible_glossy", "visible_transmission", "visible_volume_scatter"):
+        setattr(po, v, False)                       # streaks are seen by the camera only (no shadows / light sampling)
+    m.cycles.emission_sampling = "NONE"
     return po
 
 

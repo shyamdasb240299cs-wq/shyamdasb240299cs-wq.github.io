@@ -119,8 +119,8 @@ def engine_layer(which, loop, src_rpm, base_gain, slowmo=None):
         q = CAMLOG.get(str(f), CAMLOG.get(f)) if isinstance(CAMLOG, dict) else None
         if q is None or not visible[f]: continue
         rel = qrot(q["q"], Pc[f] - cam[f]); pan_f[f] = np.clip(rel[0] / max(-rel[2], 1.0), -1, 1) if rel[2] < 0 else np.sign(rel[0])
-    rate = per_sample(rate_f); g = per_sample(signal.savgol_filter(gain_f, 7, 2)); lp = per_sample(lp_f)
-    pan = per_sample(signal.savgol_filter(pan_f, 9, 2))
+    rate = per_sample(rate_f); g = per_sample(np.maximum(signal.savgol_filter(gain_f, 7, 2), 0.0)); lp = per_sample(lp_f)
+    pan = np.clip(per_sample(signal.savgol_filter(pan_f, 9, 2)), -1.0, 1.0)
     y = varispeed(loop, rate)
     # time-varying low-pass in 10 ms blocks (one-pole, state carried)
     out = np.empty_like(y); state = 0.0; blk = SR // 100

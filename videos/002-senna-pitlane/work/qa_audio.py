@@ -6,7 +6,13 @@ VD = os.path.abspath(sys.argv[1]); wav = sys.argv[2] if len(sys.argv) > 2 else o
 ref = open(os.path.join(VD, "audio", "narration.txt")).read()
 norm = lambda t: re.sub(r"[^a-z0-9' ]", " ", t.lower().replace("1993", "nineteen ninety three")).split()
 m = WhisperModel("base.en", device="cpu", compute_type="int8")
-segs, _ = m.transcribe(wav, beam_size=5, language="en")
+import wave, numpy as np
+with wave.open(wav) as wf:                                   # array input: no av/ffmpeg decode (version mismatch)
+    sr, ch, sw = wf.getframerate(), wf.getnchannels(), wf.getsampwidth(); raw = wf.readframes(wf.getnframes())
+y = np.frombuffer(raw, {2: np.int16, 4: np.int32}[sw]).astype("float32").reshape(-1, ch).mean(1)
+k = sr // 16000; y = y[:len(y) // k * k].reshape(-1, k).mean(1)   # 48k -> 16k (boxcar anti-alias)
+y = (y / max(1e-9, float(np.abs(y).max()))).astype("float32")
+segs, _ = m.transcribe(y, beam_size=5, language="en")
 hyp = " ".join(s.text for s in segs)
 r, h = norm(ref), norm(hyp)
 d = [[0] * (len(h) + 1) for _ in range(len(r) + 1)]
