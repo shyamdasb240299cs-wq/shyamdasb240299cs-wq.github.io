@@ -108,3 +108,4 @@ exhausted skeptical relieved excited.
 | inspect: pop at fN | a prop/hand jumps: check `at:` timings around that frame, add `dur`, avoid two verbs on one hand at once |
 | blank/grey mechanism shot | parts hidden inside an opaque prop → open scene or `glass` the shell |
 | render too slow / out of VRAM | `reference/render.md` (tier, `--q final` instead of cycles, `--resume`) |
+| user wants another narrator voice after rendering | audition voices, then `python bin/s3d_revoice.py <video_dir> <voice>` (tts venv): the new take is time-mapped onto the old word timings, so only the mix is redone - no re-render |
