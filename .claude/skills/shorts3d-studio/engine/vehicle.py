@@ -620,8 +620,12 @@ def xray_group(car, color=(0.55, 0.85, 1.0)):
     pw = N.new("ShaderNodeMath"); pw.operation = "POWER"; pw.inputs[1].default_value = 1.6; Ln.new(lw.outputs["Facing"], pw.inputs[0])
     rim = N.new("ShaderNodeMath"); rim.operation = "MULTIPLY_ADD"; rim.inputs[1].default_value = 2.2; rim.inputs[2].default_value = 0.08
     Ln.new(pw.outputs[0], rim.inputs[0])
+    # the glowing wipe edge fades in/out while the wipe leaves/reaches the front bumper (no bright band snapping off)
+    ends = N.new("ShaderNodeMapRange"); ends.interpolation_type = "SMOOTHSTEP"; ends.clamp = True
+    ends.inputs["From Min"].default_value = 0.0; ends.inputs["From Max"].default_value = 0.3; Ln.new(val.outputs[0], ends.inputs["Value"])
+    edge2 = N.new("ShaderNodeMath"); edge2.operation = "MULTIPLY"; Ln.new(edge.outputs[0], edge2.inputs[0]); Ln.new(ends.outputs[0], edge2.inputs[1])
     eg = N.new("ShaderNodeMath"); eg.operation = "MULTIPLY_ADD"; eg.inputs[1].default_value = 30.0
-    Ln.new(edge.outputs[0], eg.inputs[0]); Ln.new(rim.outputs[0], eg.inputs[2])
+    Ln.new(edge2.outputs[0], eg.inputs[0]); Ln.new(rim.outputs[0], eg.inputs[2])
     em = N.new("ShaderNodeEmission"); em.inputs["Color"].default_value = (*color, 1); Ln.new(eg.outputs[0], em.inputs["Strength"])
     tr = N.new("ShaderNodeBsdfTransparent")
     alpha = N.new("ShaderNodeMath"); alpha.operation = "MULTIPLY_ADD"; alpha.inputs[1].default_value = 0.45; alpha.inputs[2].default_value = 0.03
