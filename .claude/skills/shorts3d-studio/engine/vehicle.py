@@ -635,7 +635,8 @@ def xray_group(car, color=(0.55, 0.85, 1.0)):
     mix = N.new("ShaderNodeMixShader"); Ln.new(fac.outputs["Result"], mix.inputs[0]); Ln.new(gi.outputs[0], mix.inputs[1]); Ln.new(xr.outputs[0], mix.inputs[2])
     # the glowing wipe edge also shows on the still-solid side
     add = N.new("ShaderNodeAddShader"); em2 = N.new("ShaderNodeEmission"); em2.inputs["Color"].default_value = (*color, 1)
-    e2 = N.new("ShaderNodeMath"); e2.operation = "MULTIPLY"; e2.inputs[1].default_value = 25.0; Ln.new(edge.outputs[0], e2.inputs[0])
+    e2a = N.new("ShaderNodeMath"); e2a.operation = "MULTIPLY"; Ln.new(edge.outputs[0], e2a.inputs[0]); Ln.new(ends.outputs[0], e2a.inputs[1])
+    e2 = N.new("ShaderNodeMath"); e2.operation = "MULTIPLY"; e2.inputs[1].default_value = 5.0; Ln.new(e2a.outputs[0], e2.inputs[0])
     Ln.new(e2.outputs[0], em2.inputs["Strength"]); Ln.new(mix.outputs[0], add.inputs[0]); Ln.new(em2.outputs[0], add.inputs[1])
     Ln.new(add.outputs[0], go.inputs[0])
     return ng
