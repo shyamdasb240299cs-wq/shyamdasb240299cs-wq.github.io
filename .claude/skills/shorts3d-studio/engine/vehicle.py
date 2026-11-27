@@ -622,9 +622,9 @@ def xray_group(car, color=(0.55, 0.85, 1.0)):
     Ln.new(pw.outputs[0], rim.inputs[0])
     # the glowing wipe edge fades in/out while the wipe leaves/reaches the front bumper (no bright band snapping off)
     ends = N.new("ShaderNodeMapRange"); ends.interpolation_type = "SMOOTHSTEP"; ends.clamp = True
-    ends.inputs["From Min"].default_value = 0.0; ends.inputs["From Max"].default_value = 0.3; Ln.new(val.outputs[0], ends.inputs["Value"])
+    ends.inputs["From Min"].default_value = 0.0; ends.inputs["From Max"].default_value = 0.55; Ln.new(val.outputs[0], ends.inputs["Value"])
     edge2 = N.new("ShaderNodeMath"); edge2.operation = "MULTIPLY"; Ln.new(edge.outputs[0], edge2.inputs[0]); Ln.new(ends.outputs[0], edge2.inputs[1])
-    eg = N.new("ShaderNodeMath"); eg.operation = "MULTIPLY_ADD"; eg.inputs[1].default_value = 30.0
+    eg = N.new("ShaderNodeMath"); eg.operation = "MULTIPLY_ADD"; eg.inputs[1].default_value = 14.0
     Ln.new(edge2.outputs[0], eg.inputs[0]); Ln.new(rim.outputs[0], eg.inputs[2])
     em = N.new("ShaderNodeEmission"); em.inputs["Color"].default_value = (*color, 1); Ln.new(eg.outputs[0], em.inputs["Strength"])
     tr = N.new("ShaderNodeBsdfTransparent")
@@ -658,9 +658,30 @@ def xray_materials(car, roles=XRAY_ROLES, extra=()):
 
 
 def xray_keys(car, keys):
+    """Wipe keys (0 solid .. 1 x-ray). Linear in time: the scan edge crosses the car at a steady speed and never
+    lingers at the bumper."""
     ng = xray_group(car); v = ng.nodes["wipe"]
     for f, val in keys:
         v.outputs[0].default_value = val; v.outputs[0].keyframe_insert("default_value", frame=f)
+    if ng.animation_data and ng.animation_data.action:
+        _linear(ng.animation_data.action)
+
+
+def blur_through(objs):
+    """Linear extrapolation on every animation curve of `objs`: motion blur on the first/last frame of a looping
+    video samples real motion beyond the keyed range instead of a frozen pose (otherwise those 2 frames look sharp)."""
+    for ob in objs:
+        ad = getattr(ob, "animation_data", None)
+        act = ad.action if ad else None
+        if not act:
+            continue
+        curves = list(getattr(act, "fcurves", []) or [])
+        for L in getattr(act, "layers", []):
+            for st in L.strips:
+                for cb in getattr(st, "channelbags", []):
+                    curves += list(cb.fcurves)
+        for fc in curves:
+            fc.extrapolation = "LINEAR"
 
 
 def lights(car, on=True, coll=None, energy=900.0):

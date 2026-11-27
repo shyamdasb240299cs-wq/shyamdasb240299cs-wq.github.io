@@ -23,6 +23,8 @@ apart on screen. Everything here was learned the hard way on `001-twin-turbo`; f
    `spin_start = (hook.spin_first - v/fps/r - payoff.spin_last) mod 2π`.
 4. Road-texture noise: same `seed` and `noise_offset=-NF` on the payoff so its clock runs into frame 0.
 5. Verify: car step, camera step, 2nd difference, wheel ΔAngle and needles are equal across NF-1 → 0 (`check_seam`).
+6. Motion blur at the seam: `vehicle.blur_through([car.root, car.body, wheels, loop cameras + focus])` (linear
+   extrapolation), else frames NF-1 and 0 sample a frozen pose half the shutter and look sharper than their neighbours.
 
 ## Roads + nature (road.py, nature.py)
 - `Road(centreline(ctrl), width, shoulder, cut_side, cut_height, valley_drop)` + `road.build(...)`: real-scale road,
@@ -47,6 +49,8 @@ apart on screen. Everything here was learned the hard way on `001-twin-turbo`; f
 - A mechanism that the narration describes must physically do it: the wastegate valve lifts on "bleeds" and the
   bled exhaust visibly takes its dump tube round the turbine (back into the downpipe).
 - X-ray: `xray_apply(mats, group)` + `xray_keys([(f, 0..1)])` per material family (block, pipes) to reveal flows.
+- Car x-ray (`vehicle.xray_keys`) is a scan wipe with a glowing edge: keys are linear and the edge fades out over the
+  last half of the wipe, so it never parks a white band on the bumper. Give the fade-out ≥ 14 frames and end it before the cut.
 
 ### Air / exhaust flow = streamlines, not particles
 `PT.stream(name, pts, coll, PT.stream_mat(name, color), count, radius, tail, fade_in, fade_out, r0, r1, swirl)` +
