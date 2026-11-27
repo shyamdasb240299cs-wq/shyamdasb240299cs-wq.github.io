@@ -1,0 +1,52 @@
+{
+ "license": "Microsoft Rocketbox animations: MIT license (github.com/microsoft/Microsoft-Rocketbox). Credit appreciated.",
+ "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/master/Assets/Animations/all_animations_max_motextr_static/{}.max.fbx",
+ "clips": {
+  "m_idle_neutral_01": "standing idle, weight shifts",
+  "m_idle_breathe_01": "calm breathing idle",
+  "m_idle_look_around_01": "idle, looks around",
+  "m_idle_waiting_01": "impatient waiting",
+  "m_gestic_talk_neutral_01": "talking, natural hand gestures",
+  "m_gestic_talk_neutral_02": "talking, variant",
+  "m_gestic_talk_excited_01": "excited talking",
+  "m_gestic_talk_relaxed_01": "relaxed talking",
+  "m_gestic_listen_accept_01": "listening, nods yes",
+  "m_gestic_listen_deny_01": "listening, shakes no",
+  "m_gestic_shrug_01": "shrug",
+  "m_gestic_thoughtful_01": "thinking, hand to chin",
+  "m_gestic_laugh_low": "laughing",
+  "m_gestic_presentation_right_01": "presenting to the right",
+  "m_idle_scratch_head_01": "scratches head (confused)",
+  "m_idle_touch_face_01": "touches face",
+  "m_cheer_01": "cheering",
+  "m_claphands_01": "clapping",
+  "m_wave_01": "waving",
+  "m_idle_yawn_01": "yawning"
+ },
+ "alias": {
+  "idle": "m_idle_neutral_01",
+  "breathe": "m_idle_breathe_01",
+  "look_around": "m_idle_look_around_01",
+  "waiting": "m_idle_waiting_01",
+  "talk": "m_gestic_talk_neutral_01",
+  "talk2": "m_gestic_talk_neutral_02",
+  "talk_excited": "m_gestic_talk_excited_01",
+  "talk_relaxed": "m_gestic_talk_relaxed_01",
+  "agree": "m_gestic_listen_accept_01",
+  "disagree": "m_gestic_listen_deny_01",
+  "shrug": "m_gestic_shrug_01",
+  "think": "m_gestic_thoughtful_01",
+  "laugh": "m_gestic_laugh_low",
+  "present": "m_gestic_presentation_right_01",
+  "scratch_head": "m_idle_scratch_head_01",
+  "touch_face": "m_idle_touch_face_01",
+  "cheer": "m_cheer_01",
+  "clap": "m_claphands_01",
+  "wave": "m_wave_01",
+  "yawn": "m_idle_yawn_01"
+ },
+ "actors": {
+  "rb_male": "Assets/Avatars/Adults/Male_Adult_01",
+  "rb_female": "Assets/Avatars/Adults/Female_Adult_01"
+ }
+}

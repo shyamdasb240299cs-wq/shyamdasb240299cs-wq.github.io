@@ -1,0 +1,458 @@
+"""Character adapter: discovers bones/face keys on any humanoid rig, adds IK + look controls, calibrates hands."""
+import bpy, math
+from mathutils import Vector, Quaternion, Matrix
+from . import core
+
+SIDES = {"L": ("Left", "l", "L", "_l", ".L", "_L_", "l"), "R": ("Right", "r", "R", "_r", ".R", "_R_", "r")}
+CANDS = {
+    "hips": ["mixamorig:Hips", "Hips", "Bip01 Pelvis", "Bip001 Pelvis", "pelvis", "hips", "CC_Base_Hip", "hip", "J_Bip_C_Hips", "DEF-spine", "root"],
+    "head": ["mixamorig:Head", "Head", "Bip01 Head", "Bip001 Head", "head", "CC_Base_Head", "J_Bip_C_Head", "DEF-spine.006"],
+    "neck": ["mixamorig:Neck", "Neck", "Bip01 Neck", "Bip001 Neck", "neck_01", "neck01", "CC_Base_NeckTwist01", "J_Bip_C_Neck", "neckLower", "DEF-spine.004"],
+}
+LIMB = {  # canonical -> patterns ({S}=Left/Right, {s}=l/r, {X}=L/R)
+    "shoulder": ["mixamorig:{S}Shoulder", "{S}Shoulder", "Bip01 {X} Clavicle", "Bip001 {X} Clavicle", "J_Bip_{X}_Shoulder", "clavicle_{s}", "clavicle.{X}", "CC_Base_{X}_Clavicle", "{s}Collar", "DEF-shoulder.{X}"],
+    "upperarm": ["mixamorig:{S}Arm", "{S}Arm", "Bip01 {X} UpperArm", "Bip001 {X} UpperArm", "J_Bip_{X}_UpperArm", "upperarm_{s}", "upperarm01.{X}", "CC_Base_{X}_Upperarm", "{s}ShldrBend", "DEF-upper_arm.{X}"],
+    "forearm": ["mixamorig:{S}ForeArm", "{S}ForeArm", "Bip01 {X} Forearm", "Bip001 {X} Forearm", "J_Bip_{X}_LowerArm", "lowerarm_{s}", "lowerarm01.{X}", "CC_Base_{X}_Forearm", "{s}ForearmBend", "DEF-forearm.{X}"],
+    "hand": ["mixamorig:{S}Hand", "{S}Hand", "Bip01 {X} Hand", "Bip001 {X} Hand", "J_Bip_{X}_Hand", "hand_{s}", "wrist.{X}", "CC_Base_{X}_Hand", "{s}Hand", "DEF-hand.{X}"],
+    "thigh": ["mixamorig:{S}UpLeg", "{S}UpLeg", "Bip01 {X} Thigh", "Bip001 {X} Thigh", "J_Bip_{X}_UpperLeg", "thigh_{s}", "upperleg01.{X}", "CC_Base_{X}_Thigh", "{s}ThighBend", "DEF-thigh.{X}"],
+    "shin": ["mixamorig:{S}Leg", "{S}Leg", "Bip01 {X} Calf", "Bip001 {X} Calf", "J_Bip_{X}_LowerLeg", "calf_{s}", "lowerleg01.{X}", "CC_Base_{X}_Calf", "{s}Shin", "DEF-shin.{X}"],
+    "foot": ["mixamorig:{S}Foot", "{S}Foot", "Bip01 {X} Foot", "Bip001 {X} Foot", "J_Bip_{X}_Foot", "foot_{s}", "foot.{X}", "CC_Base_{X}_Foot", "{s}Foot", "DEF-foot.{X}"],
+    "toe": ["mixamorig:{S}ToeBase", "{S}ToeBase", "Bip01 {X} Toe0", "Bip001 {X} Toe0", "J_Bip_{X}_ToeBase", "ball_{s}", "toe1-1.{X}", "CC_Base_{X}_ToeBase", "{s}Toe", "DEF-toe.{X}"],
+    "eye": ["eye.{X}", "Bip01 {X}Eye", "Bip001 {X}Eye", "mixamorig:{S}Eye", "{S}Eye", "eye_{s}", "CC_Base_{X}_Eye", "J_Adj_{X}_FaceEye", "{s}Eye"],
+}
+FINGERS = ["thumb", "index", "middle", "ring", "pinky"]
+FPAT = {  # finger f (name variants), segment n
+    "thumb": ["mixamorig:{S}HandThumb{n}", "{S}HandThumb{n}", "Bip01 {X} Finger0{z}", "Bip001 {X} Finger0{z}", "thumb_0{n}_{s}", "finger1-{n}.{X}", "CC_Base_{X}_Thumb{n}", "{s}Thumb{n}", "DEF-thumb.0{n}.{X}"],
+    "index": ["mixamorig:{S}HandIndex{n}", "{S}HandIndex{n}", "Bip01 {X} Finger1{z}", "Bip001 {X} Finger1{z}", "index_0{n}_{s}", "finger2-{n}.{X}", "CC_Base_{X}_Index{n}", "{s}Index{n}", "DEF-f_index.0{n}.{X}"],
+    "middle": ["mixamorig:{S}HandMiddle{n}", "{S}HandMiddle{n}", "Bip01 {X} Finger2{z}", "Bip001 {X} Finger2{z}", "middle_0{n}_{s}", "finger3-{n}.{X}", "CC_Base_{X}_Mid{n}", "{s}Mid{n}", "DEF-f_middle.0{n}.{X}"],
+    "ring": ["mixamorig:{S}HandRing{n}", "{S}HandRing{n}", "Bip01 {X} Finger3{z}", "Bip001 {X} Finger3{z}", "ring_0{n}_{s}", "finger4-{n}.{X}", "CC_Base_{X}_Ring{n}", "{s}Ring{n}", "DEF-f_ring.0{n}.{X}"],
+    "pinky": ["mixamorig:{S}HandPinky{n}", "{S}HandPinky{n}", "Bip01 {X} Finger4{z}", "Bip001 {X} Finger4{z}", "pinky_0{n}_{s}", "finger5-{n}.{X}", "CC_Base_{X}_Pinky{n}", "{s}Pinky{n}", "DEF-f_pinky.0{n}.{X}"],
+}
+ARKIT = ["browDownLeft", "browDownRight", "browInnerUp", "browOuterUpLeft", "browOuterUpRight", "cheekPuff",
+         "cheekSquintLeft", "cheekSquintRight", "eyeBlinkLeft", "eyeBlinkRight", "eyeLookDownLeft", "eyeLookDownRight",
+         "eyeLookInLeft", "eyeLookInRight", "eyeLookOutLeft", "eyeLookOutRight", "eyeLookUpLeft", "eyeLookUpRight",
+         "eyeSquintLeft", "eyeSquintRight", "eyeWideLeft", "eyeWideRight", "jawForward", "jawLeft", "jawOpen", "jawRight",
+         "mouthClose", "mouthDimpleLeft", "mouthDimpleRight", "mouthFrownLeft", "mouthFrownRight", "mouthFunnel",
+         "mouthLeft", "mouthLowerDownLeft", "mouthLowerDownRight", "mouthPressLeft", "mouthPressRight", "mouthPucker",
+         "mouthRight", "mouthRollLower", "mouthRollUpper", "mouthShrugLower", "mouthShrugUpper", "mouthSmileLeft",
+         "mouthSmileRight", "mouthStretchLeft", "mouthStretchRight", "mouthUpperUpLeft", "mouthUpperUpRight",
+         "noseSneerLeft", "noseSneerRight", "tongueOut"]
+VISEMES = ["sil", "PP", "FF", "TH", "DD", "kk", "CH", "SS", "nn", "RR", "aa", "E", "I", "O", "U"]
+
+
+def _fmt(p, side, n=""):
+    S, s, X = ("Left", "l", "L") if side == "L" else ("Right", "r", "R")
+    z = "" if n in ("", 1) else str(int(n) - 1)  # biped: Finger1, Finger11, Finger12
+    return p.format(S=S, s=s, X=X, n=n, z=z)
+
+
+def map_bones(bones, rig_name="rig"):
+    """canonical name -> bone name for any humanoid naming; plus the spine chain (hips .. neck)."""
+    b = {}
+    for k, c in CANDS.items():
+        b[k] = next((n for n in c if n in bones), None)
+    for side in "LR":
+        for k, pats in LIMB.items():
+            b[f"{k}.{side}"] = next((_fmt(p, side) for p in pats if _fmt(p, side) in bones), None)
+        for f in FINGERS:
+            for n in (1, 2, 3):
+                b[f"{f}{n}.{side}"] = next((_fmt(p, side, n) for p in FPAT[f] if _fmt(p, side, n) in bones), None)
+    missing = [k for k in ("hips", "head", "upperarm.L", "forearm.L", "hand.L", "thigh.L", "shin.L", "foot.L") if not b.get(k)]
+    if missing:
+        raise RuntimeError(f"rig {rig_name}: cannot map bones {missing} - add the names to rigkit.CANDS/LIMB")
+    chain, cur = [], bones[b["neck"] or b["head"]].parent
+    while cur and cur.name != b["hips"]:
+        chain.append(cur.name); cur = cur.parent
+    return b, list(reversed(chain))
+
+
+def add_twist_bones(rig, meshes):
+    """Forearm twist bones. Without them the whole forearm twist happens in ONE joint (the wrist) and the skin
+    collapses like a candy wrapper - 'as if there were no bones'. Adds s3d_twist.L/R (mid-forearm -> wrist) and
+    moves the wrist half of the forearm skin weights onto it (smooth ramp). Driven at 50 % of the hand twist."""
+    b, _ = map_bones(rig.data.bones, rig.name)
+    todo = []
+    for s in "LR":
+        fa, hn = b.get(f"forearm.{s}"), b.get(f"hand.{s}")
+        if not fa or not hn or f"s3d_twist.{s}" in rig.data.bones:
+            continue
+        if any("twist" in c.name.lower() for c in rig.data.bones[fa].children):
+            continue  # the rig already has its own twist bones
+        todo.append((s, fa, hn))
+    if not todo:
+        return []
+    vl = bpy.context.view_layer
+    prev = vl.objects.active
+    for o in vl.objects:
+        o.select_set(False)
+    rig.hide_set(False); rig.select_set(True); vl.objects.active = rig
+    bpy.ops.object.mode_set(mode="EDIT")
+    eb = rig.data.edit_bones; made = []
+    for s, fa, hn in todo:
+        F, H = eb[fa], eb[hn]
+        tw = eb.new(f"s3d_twist.{s}")
+        tw.head = F.head.lerp(H.head, 0.5); tw.tail = H.head.copy()
+        tw.align_roll(F.z_axis); tw.parent = F; tw.use_connect = False; tw.use_deform = True
+        made.append((s, fa, F.head.copy(), H.head.copy()))
+    bpy.ops.object.mode_set(mode="OBJECT")
+    for s, fa, E, W in made:
+        d = W - E; L2 = max(1e-9, d.length_squared)
+        for o in meshes:
+            vg = o.vertex_groups.get(fa)
+            if not vg:
+                continue
+            tg = o.vertex_groups.get(f"s3d_twist.{s}") or o.vertex_groups.new(name=f"s3d_twist.{s}")
+            Mi = rig.matrix_world.inverted() @ o.matrix_world
+            gi = vg.index
+            for v in o.data.vertices:
+                w = next((g.weight for g in v.groups if g.group == gi), 0.0)
+                if w <= 0:
+                    continue
+                u = (Mi @ v.co - E).dot(d) / L2
+                k = 0.9 * max(0.0, min(1.0, (u - 0.3) / 0.65)) ** 2 * (3 - 2 * max(0.0, min(1.0, (u - 0.3) / 0.65)))
+                if k > 0:
+                    tg.add([v.index], w * k, "REPLACE"); vg.add([v.index], w * (1 - k), "REPLACE")
+    if prev:
+        vl.objects.active = prev
+    return [m[0] for m in made]
+
+
+def _basis(local_a, world_a, local_b, world_b):
+    """Rotation mapping local frame (a, b) onto world frame (a, b)."""
+    def frame(a, b):
+        a = Vector(a).normalized(); b = (Vector(b) - Vector(b).project(a)).normalized(); c = a.cross(b)
+        return Matrix((a, b, c)).transposed()
+    return (frame(world_a, world_b) @ frame(local_a, local_b).inverted()).to_quaternion()
+
+
+def signed_angle(a, b, n):
+    """Blender IK pole-angle convention: negative when (a x b) points along n."""
+    ang = a.angle(b, 0.0)
+    return -ang if a.cross(b).dot(n) > 0 else ang
+
+
+class Character:
+    def __init__(self, name, rig, coll=None):
+        self.name, self.rig = name, rig
+        self.coll = coll
+        self.b, self.spine = map_bones(rig.data.bones, rig.name)
+        self.meshes = [o for o in bpy.data.objects if o.type == "MESH" and (o.parent == rig or any(
+            m.type == "ARMATURE" and m.object == rig for m in o.modifiers))]
+        self._face_keys()
+        self.face_gain = float(rig.get("s3d_face_gain", 1.0))
+        self._calibrate()
+
+    # ---------------------------------------------------------- discovery
+    def _face_keys(self):
+        """arkit name -> list of (Key datablock, key name). Accepts ARKit keys in any common naming."""
+        import re
+        self.face = {}
+        lookup = {k.lower(): k for k in ARKIT}
+        vis = {v.lower(): v for v in VISEMES}
+        for o in self.meshes:
+            sk = o.data.shape_keys
+            if not sk:
+                continue
+            for kb in sk.key_blocks:
+                n = kb.name
+                if self._driven(sk, n):
+                    continue
+                base = re.sub(r"^(!ex-|AK_\d+_|ARKit[_.]?|blendShape\d*\.|A\d+_)", "", n)
+                low = base.replace("_", "").lower()
+                key = None
+                if low in lookup:
+                    key = lookup[low]
+                else:
+                    m = re.match(r"^(?:viseme_|AA_VI_\d+_|V_)(\w+)$", n)
+                    if m and m.group(1).lower() in vis:
+                        key = "v:" + vis[m.group(1).lower()]
+                if key and not any(k[0] == sk and k[1] == n for k in self.face.get(key, [])):
+                    self.face.setdefault(key, []).append((sk, n))
+        self.has_face = "jawOpen" in self.face
+
+    @staticmethod
+    def _driven(sk, kname):
+        ad = sk.animation_data
+        return bool(ad and any(d.data_path == f'key_blocks["{kname}"].value' for d in ad.drivers))
+
+    def bone(self, k):
+        return self.rig.data.bones.get(self.b.get(k) or "")
+
+    def arm_head(self, k):  # rest head in armature space
+        return self.bone(k).head_local.copy()
+
+    def _calibrate(self):
+        bones = self.rig.data.bones
+        self.height = self.rig.get("s3d_height") or max(b.tail_local.z for b in bones)
+        self.fwd = Vector((0, -1, 0))  # rest facing (MakeHuman/Mixamo convention); verified below
+        eL, eR = self.bone("eye.L"), self.bone("eye.R")
+        hd = self.bone("head")
+        self.eye_mid = ((eL.head_local + eR.head_local) / 2) if (eL and eR) else hd.head_local + Vector((0, -0.08, 0.09))
+        if self.rig.get("s3d_mouth"):
+            self.mouth = Vector(self.rig["s3d_mouth"])
+        else:
+            self.mouth = Vector((self.eye_mid.x, self.eye_mid.y - 0.025, self.eye_mid.z - 0.085))
+        self.mouth_rel_head = self.mouth - hd.head_local
+        # true lip centre from the face itself: vertices that move most when the lips pucker
+        self.lip_front = 0.012
+        for o in self.meshes:
+            sk = o.data.shape_keys
+            kn = next((k for k in ("!ex-mouthPucker", "mouthPucker", "!ex-mouthFunnel", "mouthFunnel") if sk and k in sk.key_blocks), None)
+            if kn:
+                basis, key = sk.reference_key, sk.key_blocks[kn]
+                Mi = self.rig.matrix_world.inverted() @ o.matrix_world
+                disp = sorted(((key.data[i].co - basis.data[i].co).length, i) for i in range(len(basis.data)))[-60:]
+                if disp and disp[-1][0] > 1e-4:
+                    c = sum((Mi @ basis.data[i].co for _, i in disp), Vector()) / len(disp)
+                    self.mouth = c - self.fwd * 0.006      # just behind the lip surface
+                    self.mouth_rel_head = self.mouth - hd.head_local
+                    self.lip_front = 0.006
+                    self.lips_from_mesh = True
+                break
+        for o in ([] if getattr(self, "lips_from_mesh", False) else self.meshes):
+            if o.get("s3d_part", "body") == "body" and len(o.data.vertices) > 5000:
+                Mi = self.rig.matrix_world.inverted() @ o.matrix_world
+                best = None
+                for v in o.data.vertices:
+                    p = Mi @ v.co
+                    if (p - self.mouth).length < 0.035:
+                        d = (p - self.mouth).dot(self.fwd)
+                        best = d if best is None else max(best, d)
+                if best is not None:
+                    self.lip_front = best
+                break
+        ua, fa, hn = self.bone("upperarm.L"), self.bone("forearm.L"), self.bone("hand.L")
+        self.arm_len = (ua.head_local - fa.head_local).length + (fa.head_local - hn.head_local).length
+        self.leg_len = (self.bone("thigh.L").head_local - self.bone("foot.L").head_local).length
+        self.hips_h = self.bone("hips").head_local.z
+        self.hand = {}
+        for side in "LR":
+            h = self.bone(f"hand.{side}")
+            info = {"len": h.length}
+            tips, bases, curl = [], [], Vector()
+            for f in ("index", "middle", "ring", "pinky"):
+                b1, b3 = self.bone(f"{f}1.{side}"), self.bone(f"{f}3.{side}")
+                if b1 and b3:
+                    v1 = (b1.tail_local - b1.head_local).normalized(); v3 = (b3.tail_local - b3.head_local).normalized()
+                    curl += v3 - v1; tips.append(b3.tail_local); bases.append(b1.head_local)
+            hy = (h.tail_local - h.head_local).normalized()
+            if bases:
+                fingers_dir = ((sum(tips, Vector()) / len(tips)) - h.head_local).normalized()
+            else:
+                fingers_dir = hy
+            palm = curl - curl.project(fingers_dir)
+            if palm.length < 0.05:  # straight fingers: assume palm faces down/inward in rest
+                inward = Vector((-1 if side == "L" else 1, 0, 0))
+                palm = Vector((0, 0, -1)) + inward * 0.5
+                palm -= palm.project(fingers_dir)
+            palm.normalize()
+            B = h.matrix_local.to_3x3()
+            info["palm_l"] = B.inverted() @ palm           # palm normal in hand-bone local space
+            info["fing_l"] = (B.inverted() @ fingers_dir).normalized()
+            mid1 = self.bone(f"middle1.{side}")
+            pc = (h.head_local + (mid1.head_local if mid1 else h.tail_local)) / 2
+            info["palm_center_l"] = B.inverted() @ (pc - h.head_local)  # offset from wrist, local
+            info["palm_thick"] = 0.018
+            # flexion axis per finger segment: rotate about local X or Z, sign toward palm
+            flex = {}
+            for f in FINGERS:
+                for n in (1, 2, 3):
+                    b = self.bone(f"{f}{n}.{side}")
+                    if not b:
+                        continue
+                    M = b.matrix_local.to_3x3(); vec = b.tail_local - b.head_local
+                    target = palm if f != "thumb" else (palm * 0.6 + (fingers_dir if bases else hy) * 0.15 +
+                                                       ((bases[0] if bases else h.tail_local) - b.head_local).normalized() * 0.4)
+                    best = None
+                    for ai, ax in ((0, "X"), (2, "Z")):
+                        axis = M.col[ai].to_3d() if hasattr(M.col[ai], "to_3d") else Vector(M.col[ai])
+                        for sg in (1, -1):
+                            d = (axis * sg).cross(vec)
+                            score = d.normalized().dot(target.normalized()) if d.length > 1e-9 else -1
+                            if best is None or score > best[0]:
+                                best = (score, ai, sg)
+                    flex[f"{f}{n}"] = (best[1], best[2])
+            info["flex"] = flex
+            # thumb opposition: rotation of the thumb root that swings the tip across to face the finger pads
+            t1b, t3b, m1 = self.bone(f"thumb1.{side}"), self.bone(f"thumb3.{side}"), self.bone(f"middle1.{side}")
+            info["opp"] = None
+            if t1b and t3b:
+                head, tip = t1b.head_local, t3b.tail_local
+                target = (m1.head_local if m1 else h.tail_local) + palm * 0.04
+                a, b = (tip - head), (target - head)
+                ax = a.cross(b)
+                if ax.length > 1e-6:
+                    B1 = t1b.matrix_local.to_3x3()
+                    info["opp"] = ((B1.inverted() @ ax).normalized(), min(a.angle(b), math.radians(75)))
+                    # radial abduction: swing in the palm plane, away from the index (wide spans: bread, books)
+                    i1 = self.bone(f"index1.{side}")
+                    ref = i1.head_local if i1 else h.tail_local
+                    axl = (B1.inverted() @ palm).normalized()
+                    def tip_at(sg):
+                        R = B1 @ Quaternion(axl, math.radians(30) * sg).to_matrix() @ B1.inverted()
+                        return head + R @ (tip - head)
+                    sg = 1 if (tip_at(1) - ref).length > (tip_at(-1) - ref).length else -1
+                    info["abd"] = (axl * sg, math.radians(55))
+            self.hand[side] = info
+        # forward axis of head (for look constraint)
+        Hm = hd.matrix_local.to_3x3()
+        axes = [("TRACK_X", Hm.col[0]), ("TRACK_NEGATIVE_X", -Hm.col[0]), ("TRACK_Y", Hm.col[1]),
+                ("TRACK_NEGATIVE_Y", -Hm.col[1]), ("TRACK_Z", Hm.col[2]), ("TRACK_NEGATIVE_Z", -Hm.col[2])]
+        self.head_track = max(axes, key=lambda a: Vector(a[1]).dot(self.fwd))[0]
+        if eL:
+            Em = eL.matrix_local.to_3x3()
+            ea = [("TRACK_Y", Em.col[1]), ("TRACK_NEGATIVE_Y", -Em.col[1]), ("TRACK_Z", Em.col[2]),
+                  ("TRACK_NEGATIVE_Z", -Em.col[2]), ("TRACK_X", Em.col[0]), ("TRACK_NEGATIVE_X", -Em.col[0])]
+            self.eye_track = max(ea, key=lambda a: Vector(a[1]).dot(self.fwd))[0]
+
+    # ---------------------------------------------------------- controls
+    def setup_controls(self):
+        c = core.ensure_coll(f"CTRL_{self.name}")
+        rig, pb = self.rig, self.rig.pose.bones
+        for p in pb:
+            p.rotation_mode = "QUATERNION"
+        rig.rotation_mode = "XYZ"
+        self.ctrl = {}
+        for side in "LR":
+            fa, hn, ua = self.bone(f"forearm.{side}"), self.bone(f"hand.{side}"), self.bone(f"upperarm.{side}")
+            t = core.empty(f"{self.name}_ik_hand.{side}", rig.matrix_world @ hn.head_local, c, 0.04)
+            t.rotation_mode = "QUATERNION"
+            t.rotation_quaternion = (rig.matrix_world.to_quaternion() @ hn.matrix_local.to_quaternion())
+            pole_loc = (ua.tail_local + Vector((0.0, 0.35, -0.05)))  # elbows point back
+            p = core.empty(f"{self.name}_pole_arm.{side}", rig.matrix_world @ pole_loc, c, 0.03)
+            ik = pb[fa.name].constraints.new("IK"); ik.name = "s3d_ik"
+            ik.target, ik.pole_target, ik.chain_count = t, p, 2
+            ik.pole_angle = self._pole_angle(ua, fa, pole_loc)
+            cr = pb[hn.name].constraints.new("COPY_ROTATION"); cr.name = "s3d_rot"; cr.target = t
+            self.ctrl[f"hand.{side}"], self.ctrl[f"pole_arm.{side}"] = t, p
+            th, sh, ft = self.bone(f"thigh.{side}"), self.bone(f"shin.{side}"), self.bone(f"foot.{side}")
+            ftg = core.empty(f"{self.name}_ik_foot.{side}", rig.matrix_world @ ft.head_local, c, 0.04)
+            ftg.rotation_mode = "QUATERNION"
+            ftg.rotation_quaternion = rig.matrix_world.to_quaternion() @ ft.matrix_local.to_quaternion()
+            kpole = sh.head_local + Vector((0, -0.5, 0))
+            kp = core.empty(f"{self.name}_pole_leg.{side}", rig.matrix_world @ kpole, c, 0.03)
+            ik2 = pb[sh.name].constraints.new("IK"); ik2.name = "s3d_ik"
+            ik2.target, ik2.pole_target, ik2.chain_count = ftg, kp, 2
+            ik2.pole_angle = self._pole_angle(th, sh, kpole)
+            cr2 = pb[ft.name].constraints.new("COPY_ROTATION"); cr2.name = "s3d_rot"; cr2.target = ftg
+            self.ctrl[f"foot.{side}"], self.ctrl[f"pole_leg.{side}"] = ftg, kp
+        # numerically calibrate every pole angle: the rest pose must be reproduced exactly (works for any bone roll)
+        for side in "LR":
+            for chain, tip, mid in (("arm", f"hand.{side}", f"forearm.{side}"), ("leg", f"foot.{side}", f"shin.{side}")):
+                self._calibrate_pole(pb[self.b[mid]].constraints["s3d_ik"], self.b[mid], chain == "leg")
+        for side in "LR":  # forearm twist bones take half of the hand's twist -> the wrist keeps its shape
+            tb = pb.get(f"s3d_twist.{side}")
+            if tb and self.b.get(f"hand.{side}"):
+                cr = tb.constraints.new("COPY_ROTATION"); cr.name = "s3d_twist"
+                cr.target = rig; cr.subtarget = self.b[f"hand.{side}"]
+                cr.use_x = cr.use_z = False; cr.use_y = True
+                cr.target_space = cr.owner_space = "LOCAL"; cr.mix_mode = "REPLACE"; cr.influence = 0.5
+        look = core.empty(f"{self.name}_look", rig.matrix_world @ (self.eye_mid + Vector((0, -2.0, 0))), c, 0.06, "SPHERE")
+        gaze = core.empty(f"{self.name}_gaze", rig.matrix_world @ (self.eye_mid + Vector((0, -2.0, 0))), c, 0.03, "SPHERE")
+        self.ctrl["look"], self.ctrl["gaze"] = look, gaze
+        for k, infl in (("neck", 0.25), ("head", 0.55)):
+            if self.b.get(k):
+                d = pb[self.b[k]].constraints.new("DAMPED_TRACK"); d.name = "s3d_look"; d.target = look
+                d.track_axis = self.head_track; d.influence = infl
+        for side in "LR":
+            e = self.bone(f"eye.{side}")
+            if e:
+                d = pb[e.name].constraints.new("DAMPED_TRACK"); d.name = "s3d_look"; d.target = gaze
+                d.track_axis = self.eye_track
+        return self.ctrl
+
+    def _calibrate_pole(self, con, mid_bone, is_leg=False):
+        """Choose the pole angle that makes the elbow/knee point AT the pole target, measured in a bent test pose
+        (works for A-pose and straight T-pose rigs alike, any bone roll)."""
+        rig = self.rig; vl = bpy.context.view_layer; Mw = rig.matrix_world
+        mid = rig.data.bones[mid_bone]; root = mid.parent
+        tgt, pole = con.target, con.pole_target
+        t_old, p_old = tgt.location.copy(), pole.location.copy()
+        S = Mw @ root.head_local; E0 = Mw @ mid.head_local; W0 = Mw @ mid.tail_local
+        L = (E0 - S).length + (W0 - E0).length
+        d = (W0 - S).normalized()
+        tgt.location = S + d * 0.7 * L                     # bent test pose (70 % reach)
+        want = (Mw.to_3x3() @ Vector((0, 1, 0))) if not is_leg else (Mw.to_3x3() @ Vector((0, -1, 0)))  # elbows back, knees forward
+        want = (want - want.project(d)).normalized()
+        pole.location = (S + tgt.location) / 2 + want * 0.6
+        con.influence = 1.0
+
+        def score(ang):
+            con.pole_angle = ang; vl.update()
+            E = Mw @ rig.pose.bones[mid_bone].head
+            axis_pt = S + (E - S).project(tgt.location - S)
+            off = E - axis_pt
+            return -off.normalized().dot(want) if off.length > 1e-5 else 1.0
+        best = min((score(math.radians(dg)), dg) for dg in range(-180, 180, 10))
+        lo, hi = best[1] - 10, best[1] + 10
+        for _ in range(14):
+            m1, m2 = lo + (hi - lo) / 3, hi - (hi - lo) / 3
+            if score(math.radians(m1)) < score(math.radians(m2)): hi = m2
+            else: lo = m1
+        con.pole_angle = math.radians((lo + hi) / 2)
+        tgt.location, pole.location = t_old, p_old
+        vl.update()
+        if score(con.pole_angle) > -0.9:
+            core.log(f"pole calibration {mid_bone}: weak ({score(con.pole_angle):.2f})")
+        tgt.location, pole.location = t_old, p_old
+        vl.update()
+
+    @staticmethod
+    def _pole_angle(base, tip, pole_loc):
+        a, b = base.head_local, tip.tail_local
+        pn = (b - a).cross(pole_loc - a)
+        proj = pn.cross(base.tail_local - base.head_local)
+        return signed_angle(base.x_axis, proj, base.tail_local - base.head_local)
+
+    # ---------------------------------------------------------- hand helpers
+    def hand_world_rot(self, side, palm_world, fingers_world):
+        """Hand-bone world rotation that puts the palm normal / finger direction onto given world vectors."""
+        h = self.hand[side]
+        return _basis(h["fing_l"], fingers_world, h["palm_l"], palm_world)
+
+    def wrist_for_palm(self, side, palm_point, rot):
+        """Wrist (IK target) location so that the palm surface center lands on palm_point."""
+        h = self.hand[side]
+        return Vector(palm_point) - rot @ h["palm_center_l"] - (rot @ h["palm_l"]) * h["palm_thick"]
+
+    def finger_quats(self, side, curls, spread=0.0, opp=0.0, abd=0.0):
+        """curls: dict finger->0..1 (1 = fist); opp: thumb opposition 0 (rest) .. 1 (tip facing the finger pads).
+        Returns {bone_name: Quaternion} local rotations."""
+        out = {}
+        maxdeg = {1: 70, 2: 95, 3: 70}
+        tmax = {1: 25, 2: 45, 3: 60}
+        for f in FINGERS:
+            c = curls.get(f, 0.0)
+            for n in (1, 2, 3):
+                bn = self.b.get(f"{f}{n}.{side}")
+                if not bn:
+                    continue
+                ai, sg = self.hand[side]["flex"][f"{f}{n}"]
+                ang = math.radians((tmax if f == "thumb" else maxdeg)[n]) * c * sg
+                axis = Vector((1, 0, 0)) if ai == 0 else Vector((0, 0, 1))
+                q = Quaternion(axis, ang)
+                if n == 1 and f == "thumb" and opp and self.hand[side].get("opp"):
+                    oax, omax = self.hand[side]["opp"]
+                    q = Quaternion(oax, omax * opp) @ q
+                if n == 1 and f == "thumb" and abd and self.hand[side].get("abd"):
+                    bax, bmax = self.hand[side]["abd"]
+                    q = Quaternion(bax, bmax * abd) @ q
+                if n == 1 and f != "thumb" and spread:
+                    other = Vector((0, 0, 1)) if ai == 0 else Vector((1, 0, 0))
+                    k = {"index": -1, "middle": -0.3, "ring": 0.4, "pinky": 1}[f]
+                    q = Quaternion(other, math.radians(8) * spread * k) @ q
+                out[bn] = q
+        return out
+
+    def fingertip_points(self, side):
+        """Evaluated world points along each finger (for contact tests)."""
+        pts = {}
+        pb = self.rig.pose.bones; M = self.rig.matrix_world
+        for f in FINGERS:
+            seg = []
+            for n in (1, 2, 3):
+                bn = self.b.get(f"{f}{n}.{side}")
+                if bn:
+                    p = pb[bn]; seg += [M @ p.head, M @ ((p.head + p.tail) / 2), M @ p.tail]
+            pts[f] = seg
+        return pts

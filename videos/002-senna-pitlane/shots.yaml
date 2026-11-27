@@ -1,0 +1,25 @@
+title: "The Fastest Lap Was Set In The Pit Lane 🤯"
+voice: {engine: kokoro, voice: bm_george, speed: 1.05}
+fps: 30
+res: [1080, 1920]
+tail: 0.3
+music: {track: none}
+# 3D is built by work/*.py (custom track + cars scene); this file drives voice, timing, captions.
+scenes:
+  donington: {set: {preset: void}}
+shots:
+  - {id: S01, scene: donington, say: "The *fastest* lap of the entire race was set by driving straight through the pit lane."}
+  - {id: S02, scene: donington, say: "Donington, 1993. Rain, then sun, then rain again."}
+  - {id: S03, scene: donington, say: "Ayrton Senna dives into the pits for fresh tyres..."}
+  - {id: S04, scene: donington, say: "then changes his mind."}
+  - {id: S05, scene: donington, say: "He *never* lifts."}
+  - {id: S06, scene: donington, say: "Back then, there was no pit lane speed limit."}
+  - {id: S07, scene: donington, say: "And look where Donington's pit entry was."}
+  - {id: S08, scene: donington, say: "Right before the final hairpin."}
+  - {id: S09, scene: donington, say: "Every other car had to brake hard and swing all the way around it."}
+  - {id: S10, scene: donington, say: "The pit lane cut inside it."}
+  - {id: S11, scene: donington, say: "Two hundred metres *shorter*."}
+  - {id: S12, scene: donington, say: "He blasts back out, and the clock reads one minute, eighteen point zero two nine."}
+  - {id: S13, scene: donington, say: "Fastest lap of the race... and still the lap *record* there today."}
+  - {id: S14, scene: donington, say: "A year later, pit lane speed limits arrived."}
+  - {id: S15, scene: donington, say: "So for one wet afternoon at Donington..."}

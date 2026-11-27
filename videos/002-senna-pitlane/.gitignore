@@ -1,0 +1,10 @@
+# heavy / regenerable files stay out of git (scripts in work/ rebuild them)
+build/
+assets/
+audio/src/
+audio/*.wav
+data/*.tif
+data/*.npy
+data/*.osm
+*.blend
+*.blend1

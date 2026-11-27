@@ -1,0 +1,32 @@
+{
+  "_note": "Second recurring cast member (CC0).",
+  "macro": {
+    "gender": 0.0,
+    "age": 0.5,
+    "muscle": 0.45,
+    "weight": 0.45,
+    "proportions": 0.8,
+    "height": 0.68,
+    "cupsize": 0.5,
+    "firmness": 0.5,
+    "race": {
+      "caucasian": 0.5,
+      "african": 0.2,
+      "asian": 0.3
+    }
+  },
+  "outfit": {
+    "skin": "skins/young_caucasian_female/young_caucasian_female.mhmat",
+    "eyes": "eyes/high-poly/high-poly.mhclo",
+    "eye_material": "eyes/materials/brownlight.mhmat",
+    "eyebrows": "eyebrows/eyebrow002/eyebrow002.mhclo",
+    "eyelashes": "eyelashes/eyelashes02/eyelashes02.mhclo",
+    "teeth": "teeth/teeth_base/teeth_base.mhclo",
+    "tongue": "tongue/tongue01/tongue01.mhclo",
+    "hair": "hair/bob01/bob01.mhclo",
+    "clothes": [
+      "clothes/female_sportsuit01/female_sportsuit01.mhclo",
+      "clothes/shoes02/shoes02.mhclo"
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+# "What If" (body hypothetical) — relatable action, x-ray/cutaway reveal, consequence, twist.
+title: "What If You Swallowed Gum 😮"
+voice: {engine: kokoro, voice: am_puck, speed: 1.1}
+publish: {hashtags: ["#shorts", "#body", "#science", "#whatif"]}
+
+scenes:
+  studio:
+    set: {preset: studio, light: soft}
+    props:
+      gum: {src: proc:box, size_cm: 2, at: [0.25, -0.3, 1.1], free: true}
+      stomach: {src: proc:droplet, params: {r: 0.06}, at: [0.0, 0.0, 1.05], free: true, color: "#E07A8B"}
+    cast:
+      hero: {char: rb_male, at: [0, 0], face: 0}
+    script:
+      - hero.face: {expr: happy, at: 0, dur: 2}
+      - hero.chew: {cycles: 5, at: 0.2, expr: satisfied}
+      - hero.swallow: {at: S02}
+      - hero.face: {expr: shocked, at: "w:never", dur: 1.6}
+      - hero.shrug: {at: S06}
+
+shots:
+  - {id: S01, scene: studio, say: "If you swallow gum, it doesn't stay in your stomach for seven years.",
+     cam: {size: ecu, target: hero.mouth, angle: front_right, move: push_in}}
+  - {id: S02, scene: studio, say: "Your body just can't *break it down*.", cam: {size: cu, target: hero.face, angle: front_left}}
+  - {id: S03, scene: studio, say: "Your stomach acid dissolves the sugar and flavor,",
+     cam: {size: medium, target: hero, angle: front}, fx: [{type: xray, target: hero, inner: [stomach]}]}
+  - {id: S04, scene: studio, say: "but the rubbery base never melts.",
+     cam: {size: mcu, target: hero.chest, angle: front_right, move: push_in}, fx: [{type: cutaway, target: hero, radius: 0.1, inner: [stomach]}]}
+  - {id: S05, scene: studio, say: "So your gut muscles simply *push it along* with everything else,", cam: {size: medium, target: hero, angle: front_left, move: orbit},
+     fx: [{type: flow, path: [hero.chest, hero.waist], color: "#FFD43B"}]}
+  - {id: S06, scene: studio, say: "and a day or two later, it's gone.", cam: {size: wide, target: hero, angle: front_right, move: pull_out}}
