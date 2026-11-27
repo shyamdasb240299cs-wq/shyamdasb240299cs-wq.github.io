@@ -4,7 +4,7 @@ One render camera keyed per frame (cuts = guarded jumps, motion blur never smear
 lap simulation on the real OSM/LIDAR track, race clock remapped per shot (narration timing), map overlay in 3D."""
 import bpy, sys, os, math, json, time, random
 import numpy as np
-from mathutils import Vector, Matrix, Quaternion, Euler
+from mathutils import Vector, Matrix, Quaternion, Euler, noise
 
 ARGS = sys.argv[sys.argv.index("--") + 1:]
 VD = os.path.abspath(ARGS[0]); SHEET = ARGS[ARGS.index("--sheet") + 1] if "--sheet" in ARGS else None
@@ -25,15 +25,10 @@ sc = bpy.context.scene; sc.render.fps = FPS; sc.frame_start = 0; sc.frame_end = 
 
 # ------------------------------------------------------------------ world
 W = world.World(VD); W.build_roads(); world.build_terrain(W); world.build_kerbs(W)
-world.build_barriers(W); world.build_fences(W); world.build_buildings(W); world.build_pit_garages(W)
-world.build_trees(W)
-world.build_crowd(W, [("straight_w", "Wheatcroft Straight", -1, 22, 33, 0, 165),
-                      ("straight_e", "Wheatcroft Straight", -1, 22, 33, 305, 480),
-                      ("goddards", "Goddards", -1, 30, 44, 0, 95),
-                      ("melb_down", "Melbourne Loop (down)", 1, 15, 25, 0, 360),
-                      ("redgate", "Redgate", -1, 18, 30, 0, 190),
-                      ("hollywood", "Hollywood", -1, 16, 26, 0, 200)], density=0.42)
-world.build_grandstand(W); world.build_boards(W)
+world.build_barriers(W); world.build_fences(W); world.build_buildings(W); world.build_pit_garages(W); print("pit floor terrain verts lowered", world.flatten_pits(W))
+world.build_grandstand(W); world.build_pitwall_fence(W); world.build_start_gantry(W); world.build_marshal_posts(W)
+world.build_tv_tower(W, (36.0, -96.0), float(W.h(36.0, -96.0)) + 6.5); world.build_paddock_trucks(W)
+world.build_trees(W); world.build_boards(W)
 world.setup_world(sc, strength=1.15); MIST = world.setup_mist(sc)
 log("world built")
 
@@ -83,6 +78,21 @@ t_riv_at_split = RIV.t_at_s(s_split_riv + RIV_LEAD)
 log(f"Senna split->merge {SEN.t_at_s(s_merge_sen) - SEN.t_at_s(s_split_sen):.2f}s  rival {RIV.t_at_s(s_merge_riv) - RIV.t_at_s(s_split_riv):.2f}s")
 PATHS = {"pit": vehicle.Path([Vector(p) for p in pit_route]), "trk": vehicle.Path([Vector(p) for p in trk_route])}
 SIMS = {"pit": SEN, "trk": RIV}
+
+
+S_PL0, S_PL1 = float(SEN.s[i_pl0]), float(SEN.s[i_pl1])
+
+
+def _sm(a, b, x):
+    t = min(max((x - a) / (b - a), 0.0), 1.0); return t * t * (3 - 2 * t)
+
+
+def sen_lat(s1):
+    """Senna's lateral offset (+left): left side of the straight before the split, then the pit-lane FAST lane
+    (3 m toward the pit wall = right of travel), well clear of the crews in the working lane."""
+    before = 1.8 * float(np.clip((s_split_sen - s1) / 60.0, 0, 1))
+    fast = -3.0 * _sm(S_PL0, S_PL0 + 45, s1) * (1 - _sm(S_PL1 - 70, S_PL1 - 5, s1))
+    return before + fast
 
 
 def car_s(sim, tau, t_ref):
@@ -143,9 +153,8 @@ def states(f):
         return None, None
     tau = c[3](f)
     r1, s1 = sen_state(tau); r2, s2 = riv_state(tau)
-    lat1 = 1.8 * float(np.clip((s_split_sen - s1) / 60.0, 0, 1))      # left side of the straight before the split
     lat2 = -1.8 * float(np.clip((s_split_riv + 120 - s2) / 120.0, 0, 1))
-    return (r1, s1, lat1), (r2, s2, lat2)
+    return (r1, s1, sen_lat(s1)), (r2, s2, lat2)
 
 
 def _adv(sim, s0, t):
@@ -277,18 +286,28 @@ def cut_bounds():
 CUT_AT = set(cut_bounds())
 
 
+S_STAND = None
+
+
 def states_at(cut, fv):
     name = cut[0]
-    if name in ("est_air", "est_crowd"):
+    if name == "est_crowd":
+        global S_STAND
+        if S_STAND is None:
+            P_ = R["Wheatcroft Straight"]["P"]; mid = P_[min(len(P_) - 1, 236), :2]
+            S_STAND = float(RIV.s[nearest_idx(trk_route, mid)])
+        t_c = RIV.t_at_s(S_STAND); t = t_c + (fv - (cut[1] + cut[2]) / 2) / FPS
+        s_r = float(np.interp(t + 0.35, RIV.t, RIV.s)); s_s = float(np.interp(t - 0.25, RIV.t, RIV.s))
+        return ("trk", s_s, 1.4), ("trk", s_r, -1.4)
+    if name in ("est_air",):
         t = est_tau(fv); sA = RIV.s[nearest_idx(trk_route, R["Goddards"]["P"][0, :2])] - 70.0
         return ("trk", sA - 32 + _adv(RIV, sA - 32, t), 1.2), ("trk", sA + _adv(RIV, sA, t), -1.2)
     if cut[3] is None:
         return None, None
     tau = cut[3](fv)
     r1, s1 = sen_state(tau); r2, s2 = riv_state(tau)
-    lat1 = 1.8 * float(np.clip((s_split_sen - s1) / 60.0, 0, 1))
     lat2 = -1.8 * float(np.clip((s_split_riv + 120 - s2) / 120.0, 0, 1))
-    return (r1, s1, lat1), (r2, s2, lat2)
+    return (r1, s1, sen_lat(s1)), (r2, s2, lat2)
 
 
 def sample_frames():
@@ -333,6 +352,37 @@ KWR = KW()
 HIDDEN = Matrix.Translation((0, 0, -200))
 
 
+from mathutils.bvhtree import BVHTree
+_dg = bpy.context.evaluated_depsgraph_get()
+ROAD_BVH = [BVHTree.FromObject(o, _dg) for o in bpy.data.objects if o.name.startswith("road_") or o.name == "kerbs"]
+
+
+def road_z(x, y, z_hint):
+    best = None
+    for b in ROAD_BVH:
+        hit = b.ray_cast(Vector((x, y, z_hint + 3.0)), Vector((0, 0, -1)), 8.0)
+        if hit[0] is not None and (best is None or hit[0].z > best):
+            best = hit[0].z
+    return best
+
+
+def seat_on_road(M, car):
+    """Rigid placement on the real asphalt: raycast the 4 tyre contact patches, fit the car frame to them."""
+    pts = {}
+    for k, w in car.wheels.items():
+        c = w["center"]; p = M @ Vector((c.x, c.y, 0.0))
+        z = road_z(p.x, p.y, p.z); pts[k] = Vector((p.x, p.y, z if z is not None else p.z))
+    mf = (pts["FL"] + pts["FR"]) / 2; mr = (pts["RL"] + pts["RR"]) / 2
+    ml = (pts["FL"] + pts["RL"]) / 2; mrt = (pts["FR"] + pts["RR"]) / 2
+    fwd = (mf - mr).normalized(); left = (ml - mrt); left = (left - fwd * left.dot(fwd)).normalized()
+    up = fwd.cross(left).normalized()
+    if up.z < 0: up = -up
+    left = up.cross(fwd).normalized()
+    origin = (mf + mr) / 2
+    R = Matrix((left, -fwd, up)).transposed().to_4x4(); R.translation = origin
+    return R
+
+
 def key_cars():
     for which, key in ((0, "senna"), (1, "rival")):
         car = CARS[key]; root, body = car.root, car.body
@@ -345,7 +395,7 @@ def key_cars():
                 M = HIDDEN; s = 0.0; v = 0.0; k = 0.0; acc = 0.0
             else:
                 route, s, lat = st; sim = SIMS[route]; path = PATHS[route]
-                M = vehicle.frame_matrix(path, s, lat)
+                M = seat_on_road(vehicle.frame_matrix(path, s, lat), car)
                 v = sim.v_at_s(min(max(s, 0.0), sim.L)); dv = (sim.v_at_s(min(max(s + 2, 0), sim.L)) - sim.v_at_s(min(max(s - 2, 0), sim.L))) / 4.0
                 acc = v * dv; k = path.curvature(s)
             q = M.to_quaternion()
@@ -354,7 +404,7 @@ def key_cars():
             loc = M.translation
             for i in range(3): KWR.put(root, "location", i, fv, loc[i])
             for i in range(4): KWR.put(root, "rotation_quaternion", i, fv, q[i])
-            pitch = float(np.clip(-0.0011 * acc, -0.05, 0.05)); roll = float(np.clip(-0.0011 * v * v * k, -0.05, 0.05))
+            pitch = float(np.clip(-0.0009 * acc, -0.035, 0.035)); roll = float(np.clip(-0.0009 * v * v * k, -0.035, 0.035))
             KWR.put(body, "rotation_euler", 0, fv, pitch); KWR.put(body, "rotation_euler", 1, fv, roll)
             delta = math.atan(car.wheelbase * k) if st else 0.0
             for wk, w in car.wheels.items():
@@ -366,7 +416,7 @@ def car_matrix(which, cut, fv):
     st = states_at(cut, fv)[which]
     if st is None: return None
     route, s, lat = st
-    return vehicle.frame_matrix(PATHS[route], s, lat)
+    return seat_on_road(vehicle.frame_matrix(PATHS[route], s, lat), CARS["senna" if which == 0 else "rival"])
 
 
 key_cars(); log("cars keyed")
@@ -395,90 +445,138 @@ MAP_C = Vector((0.0, -15.0, 0.0))
 reg = [H(x, y) for x in np.linspace(-300, 260, 30) for y in np.linspace(-150, 120, 20)]
 Z_MAP = max(reg) + 18.0; MAP_ALT = 700.0
 MAP_POSE = (Vector((MAP_C.x, MAP_C.y, Z_MAP + MAP_ALT)), Vector((MAP_C.x, MAP_C.y, Z_MAP)), 50.0, Vector((1, 0, 0)))
-HOOK_L0 = V3(-112, -102, 36.0); HOOK_T0 = V3(92, -40, 2.0)
-
-
-def hook_pose(u):
-    d = (HOOK_T0 - HOOK_L0).normalized()
-    return HOOK_L0 + d * (u * 0.085), HOOK_T0, 30.0, Vector((0, 0, 1))
-
-
 def car_pt(which, cut, fv, off=(0, 0, 0)):
     M = car_matrix(which, cut, fv)
     if M is None: return None
     return M @ Vector(off)
 
 
+def car_xy_fwd(which, cut, fv):
+    M = car_matrix(which, cut, fv)
+    if M is None: return None, None
+    return M.translation.copy(), -Vector(M.col[1][:3]).normalized()
+
+
+def avg_pt(fn, fv, half=0.35, n=7, shift=0.0):
+    """centred moving average over +-half seconds: a camera operator / drone that is smooth but never ahead of time"""
+    acc = Vector((0, 0, 0)); k = 0
+    for i in range(n):
+        f = fv + shift * FPS + (i / (n - 1) - 0.5) * 2 * half * FPS
+        p = fn(f)
+        if p is not None: acc += p; k += 1
+    return acc / max(k, 1)
+
+
+def shake(fv, amp_pos, amp_rot, freq, seed):
+    """handheld / vehicle micro motion: smooth noise (cm, degrees)"""
+    t = fv / FPS
+    n3 = lambda o: noise.noise(Vector((t * freq + o, seed * 1.7, 0.0)))
+    return Vector((n3(0.0), n3(11.3), n3(23.9))) * amp_pos, Vector((n3(41.0), n3(57.0), n3(73.0))) * math.radians(amp_rot)
+
+
+def drone_follow(cut, fv):
+    """high-angle drone behind the two cars (the hook + the loop back to it)"""
+    def mid(f):
+        a, _ = car_xy_fwd(0, cut, f); b, _ = car_xy_fwd(1, cut, f)
+        return (a + b) / 2 if (a and b) else (a or b)
+    def fwd(f):
+        _, fa = car_xy_fwd(0, cut, f); _, fb = car_xy_fwd(1, cut, f)
+        v = (fa + fb) if (fa and fb) else (fa or fb); v.z = 0; return v.normalized()
+    m = avg_pt(mid, fv, 0.6); f_ = avg_pt(fwd, fv, 0.9).normalized()
+    L = m - f_ * 46.0 + Vector((0, 0, 27.0)); T = m + f_ * 34.0
+    L.z = max(L.z, H(L.x, L.y) + 20.0)
+    return L, T, 30.0, Vector((0, 0, 1)), ("drone", 0.05, 0.12, 0.25)
+
+
 def cam_pose(cut, fv):
+    """-> (location, target or quaternion, lens, up, (noise kind, pos m, rot deg, Hz))"""
     name, f0, f1 = cut[0], cut[1], cut[2]; u = (fv - f0) / max(1, f1 - f0)
-    if name == "hook":
-        return hook_pose(fv)
-    if name == "return":
-        L, T, lens, up = hook_pose(fv - NF)
-        k = 1.0 - ss(f0, f0 + 70, fv)                               # rise from low behind the cars
-        cp = car_pt(0, cut, fv, (0, 9.0, 2.2)) or L; ct = car_pt(0, cut, fv, (0, -20, 0.8)) or T
-        return L.lerp(cp, k), T.lerp(ct, k), 30.0 - 8 * k, up
-    if name == "split":
-        s_pt = car_pt(0, cut, fv, (0, 0, 0.6)); r_pt = car_pt(1, cut, fv, (0, 0, 0.6))
-        tgt = s_pt.lerp(r_pt, 0.35) if (s_pt and r_pt) else (s_pt or r_pt)
-        return V3(36, -90, 5.5), tgt, 30.0, Vector((0, 0, 1))
-    if name == "est_air":
+    if name in ("hook", "return"):
+        return drone_follow(cut, fv)
+    if name == "split":                      # TV tower outside the straight, operator pans with the cars
+        tgt = avg_pt(lambda f: (lambda a, b: (a.lerp(b, 0.4) if (a and b) else (a or b)))(car_xy_fwd(0, cut, f)[0], car_xy_fwd(1, cut, f)[0]), fv, 0.3, shift=-0.08)
+        return V3(36, -96, 6.5), tgt + Vector((0, 0, 0.6)), 45.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.03, 0.8)
+    if name == "est_air":                    # helicopter orbit, gentle bank
         a = math.radians(-58 + 14 * u); C = Vector((150, -20, 0))
         L = Vector((C.x + 260 * math.cos(a), C.y + 260 * math.sin(a), 0)); L.z = H(L.x, L.y) + 78 - 8 * u
-        return L, V3(C.x, C.y, 0), 30.0, Vector((0, 0, 1))
-    if name == "est_crowd":
-        P = R["Wheatcroft Straight"]["P"]; i = 150; t, n = world._frame(P[:, :2])
-        base = P[i, :2] - n[i] * 27.5
-        L = V3(base[0], base[1], 1.85); tgt = car_pt(0, cut, fv, (0, -6, 0.5)) or V3(P[i, 0], P[i, 1], 0.5)
-        return L, tgt, 34.0, Vector((0, 0, 1))
-    if name == "chase_entry":
-        lag = 5.0
-        L = car_pt(0, cut, fv - lag, (1.7, 7.8, 1.45)); T = car_pt(0, cut, fv, (0, -6, 0.5))
-        return L, T, 27.0, Vector((0, 0, 1))
-    if name == "box_wait":
-        L = BOX - BN * 2.6 - EAST * 1.2 + Vector((0, 0, 1.45)); T = BOX + BN * 10.0 + EAST * 60 + Vector((0, 0, 1.2))
-        return L, T, 26.0, Vector((0, 0, 1))
-    if name == "box_pass":
-        L = BOX + BN * 14.6 + WEST * 9.0 + Vector((0, 0, 0.75)); T = BOX + BN * 6.0 + EAST * 6.0 + Vector((0, 0, 1.2))
-        return L, T, 22.0, Vector((0, 0, 1))
-    if name == "pit_side":
-        lag = 3.0
-        L = car_pt(0, cut, fv - lag, (-7.5, 0, 1.9)); T = car_pt(0, cut, fv, (0, -3.0, 0.6))
-        return L, T, 30.0, Vector((0, 0, 1))
-    if name == "rise":
+        up = Vector((0, 0, 1)) + (V3(C.x, C.y, 0) - L).normalized().cross(Vector((0, 0, 1))) * 0.04
+        return L, V3(C.x, C.y, 0), 30.0, up.normalized(), ("drone", 0.12, 0.08, 0.2)
+    if name == "est_crowd":                  # from the back of the grandstand, over the spectators' heads, panning with the cars
+        rows = W.stand_rows; top = rows[-1][0]; mid = top[len(top) // 2]
+        frontp = rows[0][0][len(rows[0][0]) // 2]
+        back = Vector((mid[0], mid[1], 0)) - (Vector((mid[0], mid[1], 0)) - Vector((frontp[0], frontp[1], 0))).normalized() * 0.45
+        L = Vector((back.x, back.y, mid[2] + 1.8))
+        tgt = avg_pt(lambda f: (lambda a, b: (a.lerp(b, 0.5) if (a and b) else (a or b)))(car_xy_fwd(0, cut, f)[0], car_xy_fwd(1, cut, f)[0]), fv, 0.25, shift=-0.05)
+        return L, tgt + Vector((0, 0, 0.6)), 32.0, Vector((0, 0, 1)), ("hand", 0.006, 0.2, 0.8)
+    if name == "chase_entry":                # 1993 roll-hoop onboard camera (looking over Senna's helmet)
+        M = car_matrix(0, cut, fv)
+        L = M @ Vector((0.0, 0.12, 1.16)); T = M @ Vector((0.0, -12.0, 0.55))
+        return L, T, 18.0, Vector(M.col[2][:3]), ("onboard", 0.002, 0.25, 11.0)
+    if name == "box_wait":                   # handheld behind the crew in the McLaren box
+        L = BOX - BN * 4.6 + EAST * 0.15; T = BOX + BN * 14.0 + EAST * 2.2
+        L.z = W.pit_zf(BOX) + 1.45; T.z = W.pit_zf(T) + 1.0
+        return L, T, 21.0, Vector((0, 0, 1)), ("hand", 0.01, 0.35, 0.7)
+    if name == "box_pass":                   # low camera at the pit wall, fast pan with the car
+        L = BOX + BN * 8.3 + WEST * 13.0; L.z = W.pit_zf(L) + 0.85
+        base = BOX + BN * 10.5 + EAST * 45.0; base.z = W.pit_zf(base) + 0.9
+        tgt = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.1)
+        cpos, _ = car_xy_fwd(0, cut, fv)
+        passed = 0.0 if cpos is None else _sm(6.0, -6.0, (cpos - L).dot(EAST))
+        return L, base.lerp(tgt + Vector((0, 0, 0.6)), passed), 21.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.05, 1.2)
+    if name == "pit_side":                   # long-lens TV pan from the grandstand side of the track
+        P = R["Wheatcroft Straight"]["P"]; i = 230; t, n = world._frame(P[:, :2])
+        base = P[i, :2] - n[i] * 21.0
+        L = V3(base[0], base[1], 6.0)
+        tgt = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.1)
+        return L, tgt + Vector((0, 0, 0.5)), 160.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.015, 0.9)
+    if name == "rise":                       # drone climbs over the pit lane to the top-down map
         k = ss(0.0, 1.0, u)
-        L0 = car_pt(0, cut, f0, (-7.5, 0, 1.9)) or V3(-60, 40, 10); T0_ = car_pt(0, cut, f0, (0, -3, 0.6)) or V3(-100, 50, 0)
+        L0 = V3(-40, 52, 24.0); T0_ = V3(60, 15, 0.0)
         L1, T1, lens1, up1 = MAP_POSE
-        L = L0.lerp(L1, k); L.z = L0.z + (L1.z - L0.z) * (k ** 2.2)
-        q0 = look_quat(L0, T0_); q1 = look_quat(L1, T1, up1); q = q0.slerp(q1, ss(0.15, 1.0, u))
-        return L, q, 30.0 + (lens1 - 30.0) * k, None
+        L = L0.lerp(L1, k); L.z = L0.z + (L1.z - L0.z) * (k ** 2.0)
+        q0 = look_quat(L0, T0_); q1 = look_quat(L1, T1, up1); q = q0.slerp(q1, ss(0.1, 0.95, u))
+        return L, q, 28.0 + (lens1 - 28.0) * k, None, ("drone", 0.05 * (1 - k), 0.05 * (1 - k), 0.3)
     if name == "map":
         L, T, lens, up = MAP_POSE
-        return L - Vector((0, 0, 30 * u)), T, lens, up
-    if name == "descend":
+        return L - Vector((0, 0, 30 * u)), T, lens, up, None
+    if name == "descend":                    # drone drops back down to the pit exit
         k = ss(0.0, 1.0, u)
-        L1 = V3(-232, 66, 4.8); T1 = V3(-298, 104, 1.2)
+        L1 = V3(-232, 66, 6.0); T1 = V3(-300, 104, 1.0)
         L0, T0_, lens0, up0 = MAP_POSE; L0 = L0 - Vector((0, 0, 30))
-        L = L0.lerp(L1, k); L.z = L1.z + (L0.z - L1.z) * ((1 - k) ** 2.2)
+        L = L0.lerp(L1, k); L.z = L1.z + (L0.z - L1.z) * ((1 - k) ** 2.0)
         q = look_quat(L0, T0_, up0).slerp(look_quat(L1, T1), ss(0.0, 0.85, u))
-        return L, q, lens0 + (28.0 - lens0) * k, None
-    if name == "track_side":
-        lag = 3.0
-        L = car_pt(0, cut, fv - lag, (9.0, 1.5, 1.7)); T = car_pt(0, cut, fv, (0, -4, 0.6))
-        return L, T, 34.0, Vector((0, 0, 1))
-    if name == "hero_slow":
-        M_end = car_matrix(0, cut, f1)
-        L = M_end @ Vector((-4.5, -30.0, 0.55)); T = car_pt(0, cut, fv, (0, -1.0, 0.45))
-        return L, T, 58.0, Vector((0, 0, 1))
-    if name == "drone":
-        L = car_pt(0, cut, fv, (0, 18 + 14 * u, 9 + 16 * u)); T = car_pt(0, cut, fv, (0, -22, 0))
-        return L, T, 28.0, Vector((0, 0, 1))
-    if name == "limit":
+        return L, q, lens0 + (30.0 - lens0) * k, None, ("drone", 0.05 * k, 0.05 * k, 0.3)
+    if name == "track_side":                 # TV camera outside Redgate, pans as he rejoins and turns in
+        L = V3(-338, 118, 3.2)
+        tgt = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.25, shift=-0.06)
+        return L, tgt + Vector((0, 0, 0.5)), 70.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.03, 0.9)
+    if name == "hero_slow":                  # super slow-motion camera at track level, long lens, car coming at it
+        st = states_at(cut, float(f1))[0]; path = PATHS[st[0]]; s_cam = st[1] + 38.0
+        tt = path.tangent(s_cam); side = 1.0 if path.curvature(s_cam) < 0 else -1.0
+        nrm = Vector((-tt.y, tt.x, 0)).normalized() * side
+        L = path.point(s_cam) + nrm * 8.0; zr = road_z(L.x, L.y, L.z) or path.point(s_cam).z; L.z = max(zr, H(L.x, L.y)) + 0.95
+        tgt = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.2)
+        return L, tgt + Vector((0, 0, 0.45)), 150.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.015, 0.6)
+    if name == "drone":                      # helicopter following above and behind
+        m = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.6)
+        fw = avg_pt(lambda f: car_xy_fwd(0, cut, f)[1], fv, 0.9); fw.z = 0; fw.normalize()
+        L = m - fw * (26 + 18 * u) + Vector((0, 0, 14 + 14 * u)); L.z = max(L.z, H(L.x, L.y) + 12)
+        return L, m + fw * 25, 28.0, Vector((0, 0, 1)), ("drone", 0.08, 0.1, 0.25)
+    if name == "limit":                      # handheld at the old pit entry, slow push toward the new limit sign
         P = R["old_entry"]["P"]; t, n = world._frame(P[:, :2])
-        L = V3(P[2, 0] - n[2, 0] * 1.5, P[2, 1] - n[2, 1] * 1.5, 1.6) + Vector((t[2, 0], t[2, 1], 0)) * (-6 + 5 * u)
-        T = V3(P[22, 0], P[22, 1], 1.4)
-        return L, T, 34.0, Vector((0, 0, 1))
+        L = V3(P[11, 0] + n[11, 0] * 1.0, P[11, 1] + n[11, 1] * 1.0, 1.6) + Vector((t[11, 0], t[11, 1], 0)) * (3.0 * u)
+        T = V3(P[24, 0] + n[24, 0] * 5.4, P[24, 1] + n[24, 1] * 5.4, 1.9)
+        return L, T, 40.0, Vector((0, 0, 1)), ("hand", 0.01, 0.3, 0.6)
     raise KeyError(name)
+
+
+def apply_noise(L, q, kind, fv):
+    if not kind: return L, q
+    k, ap, ar, hz = kind
+    dp, dr = shake(fv, ap, ar, hz, hash(k) % 97)
+    if k == "onboard":                                   # engine vibration: high frequency, tiny
+        dp2, dr2 = shake(fv * 3.1, ap, ar * 0.6, 17.0, 5); dp += dp2; dr += dr2
+    return L + dp, q @ Euler((dr.x, dr.y, dr.z * 0.5)).to_quaternion()
 
 
 CAM = bpy.data.objects.new("CAM", bpy.data.cameras.new("CAM")); sc.collection.objects.link(CAM); sc.camera = CAM
@@ -489,8 +587,9 @@ CAMLOG = {}
 def key_camera():
     prev = None
     for fv, cut in SAMPLES:
-        L, T, lens, up = cam_pose(cut, fv)
+        L, T, lens, up, kind = cam_pose(cut, fv)
         q = T if isinstance(T, Quaternion) else look_quat(L, T, up)
+        L, q = apply_noise(L, q, kind, fv)
         if prev is not None and prev.dot(q) < 0: q = -q
         prev = q
         for i in range(3): KWR.put(CAM, "location", i, fv, L[i])
@@ -586,7 +685,7 @@ def build_map():
         return route[i0:i1 + 1]
     red_P = upto(trk_route, 0); gold_P = upto(pit_route, 0)
     Lr = float(np.sum(np.linalg.norm(np.diff(red_P[:, :2], axis=0), axis=1))); Lg = float(np.sum(np.linalg.norm(np.diff(gold_P[:, :2], axis=0), axis=1)))
-    red, _ = fade_mat("map_red", (1.0, 0.1, 0.06), 9.0); gold, _ = fade_mat("map_gold", (1.0, 0.72, 0.12), 10.0)
+    red, _ = fade_mat("map_red", (1.0, 0.06, 0.03), 3.2); gold, _ = fade_mat("map_gold", (1.0, 0.62, 0.05), 3.6)
     rc = curve_obj("route_red", red_P, zm + 1.2, 1.7, red, lateral=-1.6); gc = curve_obj("route_gold", gold_P, zm + 1.4, 1.9, gold, lateral=0.0)
     f9a, f9b = S["S09"][0] + 6, S["S09"][1] - 20; f10a, f10b = S["S10"][0] + 4, S["S10"][1] - 12
     for cobj, fa, fb in ((rc, f9a, f9b), (gc, f10a, f10b)):
@@ -594,11 +693,11 @@ def build_map():
         cobj.data.bevel_factor_end = 1.0; cobj.data.keyframe_insert("bevel_factor_end", frame=fb)
     # markers riding the tips (ghost = red ring, Senna = head sticker)
     import bmesh
-    me = bpy.data.meshes.new("ghost"); bm = bmesh.new(); bmesh.ops.create_circle(bm, cap_ends=True, segments=24, radius=6.5); bm.to_mesh(me); bm.free()
+    me = bpy.data.meshes.new("ghost"); bm = bmesh.new(); bmesh.ops.create_circle(bm, cap_ends=True, segments=24, radius=9.0); bm.to_mesh(me); bm.free()
     ghost = bpy.data.objects.new("ghost_marker", me); MAPCOL.objects.link(ghost); me.materials.append(red)
     img = bpy.data.images.load(os.path.join(VD, "assets", "senna_head.png"))
     hm, _ = fade_mat("map_head", (1, 1, 1), 1.15, image=img)
-    w_h = 40.0; ar = img.size[1] / img.size[0]
+    w_h = 62.0; ar = img.size[1] / img.size[0]
     head = world.mesh_obj("senna_head", [(-w_h / 2, -w_h * ar / 2, 0), (w_h / 2, -w_h * ar / 2, 0), (w_h / 2, w_h * ar / 2, 0), (-w_h / 2, w_h * ar / 2, 0)],
                           [(0, 1, 2, 3)], MAPCOL, uvs=[(0, 0), (1, 0), (1, 1), (0, 1)], mat=hm, smooth=False)
     head.rotation_euler = (0, 0, -math.pi / 2)
@@ -612,14 +711,14 @@ def build_map():
         x, y = tip(gold_P, ug); head.location = (x, y, Z_MAP + 3.0 + 1.5 * math.sin(f * 0.25)); head.keyframe_insert("location", frame=f)
     pop_keys(ghost, S["S09"][0] + 2, None, 1.0); pop_keys(head, S["S10"][0], None, 1.0)
     # labels
-    wm, _ = fade_mat("map_label", (0.95, 0.97, 1.0), 3.0); gm, _ = fade_mat("map_label_gold", (1.0, 0.78, 0.2), 6.0)
+    wm, _ = fade_mat("map_label", (0.95, 0.97, 1.0), 2.2); gm, _ = fade_mat("map_label_gold", (1.0, 0.78, 0.2), 6.0)
     rm, _ = fade_mat("map_label_red", (1.0, 0.25, 0.18), 6.0)
-    tg = text_obj("lab_goddards", "GODDARDS", (205.0, -78.0), 12.0, wm, Z_MAP + 2.5); pop_keys(tg, S["S08"][0] + 18, None)
-    te = text_obj("lab_entry", "1993 PIT ENTRY", (60.0, -98.0), 11.0, wm, Z_MAP + 2.5); pop_keys(te, S["S08"][0] + 30, None)
-    t_r = text_obj("lab_red", f"{Lr:.0f} m", (150.0, 30.0), 13.0, rm, Z_MAP + 2.5); pop_keys(t_r, S["S11"][0] + 2, None)
-    t_g = text_obj("lab_gold", f"{Lg:.0f} m", (20.0, -20.0), 13.0, gm, Z_MAP + 2.5); pop_keys(t_g, S["S11"][0] + 8, None)
-    t_d = text_obj("lab_diff", f"-{round((Lr - Lg) / 10) * 10:.0f} m", (-60.0, -70.0), 30.0, gm, Z_MAP + 3.0); pop_keys(t_d, S["S11"][0] + 18, None)
-    t_n = text_obj("lab_nolimit", "NO SPEED LIMIT", (-60.0, 70.0), 10.5, wm, Z_MAP + 2.5); pop_keys(t_n, S["S11"][0] + 30, None)
+    tg = text_obj("lab_goddards", "GODDARDS", (200.0, -82.0), 19.0, wm, Z_MAP + 2.5); pop_keys(tg, S["S08"][0] + 18, None)
+    te = text_obj("lab_entry", "1993 PIT ENTRY", (55.0, -104.0), 17.0, wm, Z_MAP + 2.5); pop_keys(te, S["S08"][0] + 30, None)
+    t_r = text_obj("lab_red", f"{Lr:.0f} m", (150.0, 38.0), 22.0, rm, Z_MAP + 2.5); pop_keys(t_r, S["S11"][0] + 2, None)
+    t_g = text_obj("lab_gold", f"{Lg:.0f} m", (25.0, -28.0), 22.0, gm, Z_MAP + 2.5); pop_keys(t_g, S["S11"][0] + 8, None)
+    t_d = text_obj("lab_diff", f"-{round((Lr - Lg) / 10) * 10:.0f} m", (-55.0, -78.0), 44.0, gm, Z_MAP + 3.0); pop_keys(t_d, S["S11"][0] + 18, None)
+    t_n = text_obj("lab_nolimit", "NO SPEED LIMIT", (-70.0, 78.0), 16.0, wm, Z_MAP + 2.5); pop_keys(t_n, S["S11"][0] + 30, None)
     for fnode in fade_nodes:
         for fr, v in FADE_KEYS:
             fnode.outputs[0].default_value = v; fnode.outputs[0].keyframe_insert("default_value", frame=fr)
@@ -663,10 +762,9 @@ def build_crew():
     HOME = os.path.expanduser("~/.shorts3d")
     paths = {"chars": os.path.join(HOME, "library", "characters"), "mh_data": os.path.join(HOME, "mh", "data"),
              "mh_assets": os.path.join(HOME, "mh", "assets"), "cache": HOME, "clips": os.path.join(HOME, "clips")}
-    floor = bpy.data.objects.new("PIT_FLOOR", None); sc.collection.objects.link(floor); floor.location = (0, 0, BZ + 0.03)
     car_dir = WEST
-    # stop point the crew expected (front of the box, working lane)
-    stop = BOX + BN * 7.0
+    # stop point the crew expected (front of the box, working lane - the car passes 3 m further out, in the fast lane)
+    stop = BOX + BN * 5.4
     spots = [("crew02", stop + EAST * 2.4 + BN * -1.6, "tyre"), ("crew03", stop + WEST * 2.6 + BN * -1.6, "tyre"),
              ("crew04", stop + EAST * 2.4 + BN * 2.2, "tyre"), ("crew05", stop + WEST * 2.6 + BN * 2.2, "lolly"),
              ("crew06", stop + EAST * 4.6 - BN * 3.0, "chief")]
@@ -675,7 +773,8 @@ def build_crew():
     frames = list(range(S["S03"][0] - 10, S["S06"][1] + 2))
     for i, (key, p, role) in enumerate(spots):
         rig = EB.load_character(key, {"char": key}, paths, {})
-        rig.parent = floor
+        zf = W.pit_zf(p); floor = bpy.data.objects.new(f"PIT_FLOOR_{key}", None); sc.collection.objects.link(floor)
+        floor.location = (0, 0, zf); rig.parent = floor
         local = Vector((p.x, p.y, 0.0))
         face_pt = (BOX + BN * 12.0 + EAST * 20.0)
         yaw = math.atan2(face_pt.x - p.x, -(face_pt.y - p.y))
@@ -688,7 +787,7 @@ def build_crew():
         for f in range(S["S04"][0] - 5, S["S05"][1] + 1, 6):
             cpos = car_pt(0, CUT_OF[f], float(f), (0, 0, 0.7))
             if cpos is None: continue
-            tgt = [cpos.x, cpos.y, cpos.z - (BZ + 0.03)]
+            tgt = [cpos.x, cpos.y, cpos.z - W.pit_zf(p)]
             pf.do("look_at", {"target": tgt, "at_s": f / FPS})
         if role in ("lolly", "chief"):
             pf.do("clip", {"name": "shrug", "at_s": (S["S05"][1] - 22) / FPS, "dur": 1.6})
@@ -704,45 +803,96 @@ def build_crew():
     return spots
 
 
+def _ground_obj(o, z_floor):
+    bpy.context.view_layer.update()
+    mn = min((o.matrix_world @ Vector(c)).z for c in o.bound_box)
+    o.location.z += z_floor - mn + 0.002
+
+
 def build_pit_props(spots):
     import bmesh
     Cp = world.coll("PIT_PROPS")
-    rub = world.flat_mat("wet_tyre", (0.014, 0.014, 0.015), rough=0.4)
-    blanket = world.flat_mat("tyre_blanket", (0.5, 0.03, 0.03), rough=0.8)
-    me = bpy.data.meshes.new("wet_tyre"); bm = bmesh.new()
-    bmesh.ops.create_cone(bm, cap_ends=True, segments=20, radius1=0.33, radius2=0.33, depth=0.36)
-    bm.to_mesh(me); bm.free(); me.materials.append(rub)
-    me2 = bpy.data.meshes.new("blanket"); bm = bmesh.new()
-    bmesh.ops.create_cone(bm, cap_ends=False, segments=20, radius1=0.345, radius2=0.345, depth=0.3); bm.to_mesh(me2); bm.free(); me2.materials.append(blanket)
+    rub = world.flat_mat("wet_tyre", (0.014, 0.014, 0.015), rough=0.38)
+    blanket = world.flat_mat("tyre_blanket", (0.42, 0.03, 0.03), rough=0.85)
+    strap = world.flat_mat("blanket_strap", (0.05, 0.05, 0.05), rough=0.6)
+    rim = world.flat_mat("rim_magnesium", (0.5, 0.5, 0.52), rough=0.3, metal=1.0)
+    def wheel_mesh():
+        me = bpy.data.meshes.new("wet_wheel"); bm = bmesh.new()
+        bmesh.ops.create_cone(bm, cap_ends=True, segments=28, radius1=0.33, radius2=0.33, depth=0.36)      # tyre
+        bmesh.ops.create_cone(bm, cap_ends=True, segments=20, radius1=0.21, radius2=0.21, depth=0.362)     # rim face
+        bm.to_mesh(me); bm.free(); me.materials.append(rub); me.materials.append(rim)
+        n_t = 28 + 2; me.polygons.foreach_set("material_index", [0 if i < n_t else 1 for i in range(len(me.polygons))])
+        return me
+    def blanket_mesh():
+        me = bpy.data.meshes.new("blanket"); bm = bmesh.new()
+        bmesh.ops.create_cone(bm, cap_ends=False, segments=28, radius1=0.345, radius2=0.345, depth=0.3)
+        bm.to_mesh(me); bm.free(); me.materials.append(blanket); return me
+    wm, bmh = wheel_mesh(), blanket_mesh()
     for k, (key, p, role) in enumerate(spots):
         if role != "tyre": continue
-        for j in range(2):
-            base = p + EAST * 0.7 + BN * 0.6 * (j - 0.5)
-            t = bpy.data.objects.new(f"tyre_{k}_{j}", me); Cp.objects.link(t); t.location = (base.x, base.y, BZ + 0.03 + 0.33)
-            t.rotation_euler = (math.pi / 2, 0, math.atan2(BN.y, BN.x) + 0.2 * j)
-            bl = bpy.data.objects.new(f"blanket_{k}_{j}", me2); Cp.objects.link(bl); bl.location = t.location; bl.rotation_euler = t.rotation_euler
-    # wheel guns + lollipop + pit board on the pit wall
+        base = p + EAST * 0.75
+        t = bpy.data.objects.new(f"wheel_{k}", wm); Cp.objects.link(t)
+        t.location = (base.x, base.y, 0); t.rotation_euler = (math.pi / 2, 0, math.atan2(BN.y, BN.x) + 0.25)
+        _ground_obj(t, W.pit_zf(base))
+        bl = bpy.data.objects.new(f"blanket_{k}", bmh); Cp.objects.link(bl); bl.location = t.location; bl.rotation_euler = t.rotation_euler
+    # wheel guns (the uploaded model): apply its parent transforms, scale to 0.34 m, lie it on the floor
     try:
         before = set(bpy.data.objects)
         bpy.ops.import_scene.gltf(filepath="/root/.claude/uploads/9d2567ac-2881-58a8-b77d-52de40e0710d/3333a52b-impact_wrench.glb")
-        gun = [o for o in bpy.data.objects if o not in before and o.type == "MESH"]
-        for g in gun:
-            for c in list(g.users_collection): c.objects.unlink(g)
-            Cp.objects.link(g)
-        if gun:
-            g0 = gun[0]; d = max(g0.dimensions); s_ = 0.32 / max(d, 1e-6); g0.scale = (s_, s_, s_)
-            g0.parent = None; g0.location = spots[0][1] + EAST * 0.2 + BN * 0.9 + Vector((0, 0, BZ + 0.06))
+        new = [o for o in bpy.data.objects if o not in before]
+        bpy.context.view_layer.update()
+        meshes = [o for o in new if o.type == "MESH"]
+        for o in meshes:
+            mw = o.matrix_world.copy(); o.parent = None; o.data.transform(mw); o.matrix_world = Matrix.Identity(4)
+            for c in list(o.users_collection): c.objects.unlink(o)
+            Cp.objects.link(o)
+        for o in new:
+            if o.type != "MESH": bpy.data.objects.remove(o, do_unlink=True)
+        if meshes:
+            import bmesh
+            g = meshes[0]; bm = bmesh.new(); bm.from_mesh(g.data)
+            for o in meshes[1:]:                       # merge the other parts into one mesh (data level, no operators)
+                tmp = bmesh.new(); tmp.from_mesh(o.data)
+                off = len(g.data.materials)
+                for m in o.data.materials: g.data.materials.append(m)
+                for fc in tmp.faces: fc.material_index += off
+                me_tmp = bpy.data.meshes.new("tmp"); tmp.to_mesh(me_tmp); tmp.free()
+                bm.from_mesh(me_tmp); bpy.data.meshes.remove(me_tmp)
+                bpy.data.objects.remove(o, do_unlink=True)
+            bm.to_mesh(g.data); bm.free()
+            Pv = np.array([v.co[:] for v in g.data.vertices]); c = (Pv.min(0) + Pv.max(0)) / 2; size = (Pv.max(0) - Pv.min(0)).max()
+            g.data.transform(Matrix.Scale(0.34 / size, 4) @ Matrix.Translation(Vector(-c)))
+            for i, (key, p, role) in enumerate([sp for sp in spots if sp[2] == "tyre"][:2]):
+                gg = g if i == 0 else g.copy()
+                if i: Cp.objects.link(gg)
+                pos = p + EAST * 0.2 + BN * 0.7; gg.location = (pos.x, pos.y, 0); gg.rotation_euler = (math.pi / 2, 0, 0.6 + i)
+                _ground_obj(gg, W.pit_zf(pos))
     except Exception as ex:
         log("wheel gun skipped", ex)
-    pole = bpy.data.meshes.new("lolly_pole"); bm = bmesh.new(); bmesh.ops.create_cone(bm, cap_ends=True, segments=8, radius1=0.02, radius2=0.02, depth=1.6)
-    bm.to_mesh(pole); bm.free(); pole.materials.append(world.flat_mat("lolly_pole", (0.6, 0.6, 0.6), metal=1.0, rough=0.3))
-    disc = bpy.data.meshes.new("lolly_disc"); bm = bmesh.new(); bmesh.ops.create_cone(bm, cap_ends=True, segments=24, radius1=0.24, radius2=0.24, depth=0.02)
-    bm.to_mesh(disc); bm.free(); disc.materials.append(world.flat_mat("lolly_disc", (0.85, 0.08, 0.05), rough=0.4))
-    lp = spots[3][1] + BN * 0.5 + EAST * 0.4
-    po = bpy.data.objects.new("lolly_pole", pole); Cp.objects.link(po); po.location = (lp.x, lp.y, BZ + 0.83)
-    do = bpy.data.objects.new("lolly_disc", disc); Cp.objects.link(do); do.location = (lp.x, lp.y, BZ + 1.7); do.rotation_euler = (math.pi / 2, 0, math.atan2(BN.y, BN.x))
+    # lollipop (aluminium pole + round BRAKES board) leaning on the garage pillar beside the lollipop man
+    pole = bpy.data.meshes.new("lolly_pole"); bm = bmesh.new(); bmesh.ops.create_cone(bm, cap_ends=True, segments=10, radius1=0.016, radius2=0.016, depth=1.7)
+    bm.to_mesh(pole); bm.free(); pole.materials.append(world.flat_mat("alu", (0.7, 0.7, 0.72), metal=1.0, rough=0.25))
+    disc = bpy.data.meshes.new("lolly_disc"); bm = bmesh.new(); bmesh.ops.create_cone(bm, cap_ends=True, segments=32, radius1=0.25, radius2=0.25, depth=0.012)
+    bm.to_mesh(disc); bm.free(); disc.materials.append(world.flat_mat("lolly_disc", (0.85, 0.06, 0.04), rough=0.35))
+    pil = BOX + WEST * 2.3 + BN * 0.32
+    zf = W.pit_zf(pil); tilt = 0.17
+    po = bpy.data.objects.new("lolly_pole", pole); Cp.objects.link(po)
+    po.location = (pil.x, pil.y, zf + 0.85 * math.cos(tilt)); po.rotation_euler = (tilt * BN.y, -tilt * BN.x, 0)
+    do = bpy.data.objects.new("lolly_disc", disc); Cp.objects.link(do); do.parent = po
+    do.location = (0, 0, 0.85 + 0.2); do.rotation_euler = (math.pi / 2, 0, math.atan2(BN.y, BN.x) + math.pi / 2)
 
 
+def garage_lights():
+    """fluorescent ceiling light in the McLaren box + a softer one in the neighbouring boxes (lit garages in the rain)"""
+    for k, (c, ux, n_out, z0) in enumerate(W.bays):
+        if abs(k - 21) > 3: continue
+        L_ = bpy.data.lights.new(f"garage_light_{k}", "AREA"); L_.shape = "RECTANGLE"; L_.size = 3.2; L_.size_y = 6.0
+        L_.energy = 900.0 if k == 21 else 350.0; L_.color = (1.0, 0.97, 0.9)
+        o = bpy.data.objects.new(f"garage_light_{k}", L_); sc.collection.objects.link(o)
+        p = Vector((c[0], c[1], 0)) - Vector((n_out[0], n_out[1], 0)) * 4.5; o.location = (p.x, p.y, z0 + 3.15)
+
+
+garage_lights()
 try:
     SPOTS = build_crew(); build_pit_props(SPOTS); log("crew + pit props")
 except Exception as ex:
@@ -813,7 +963,7 @@ def build_spray(car, key):
     """Rear spray plume (volume mist) riding the car; density follows the car speed."""
     import bmesh
     me = bpy.data.meshes.new(f"{key}_spray"); bm = bmesh.new()
-    prof = [(0.0, 0.9, 0.12, 0.6), (3.0, 1.6, 0.05, 1.4), (8.0, 2.8, 0.0, 2.6), (16.0, 4.4, 0.0, 3.8)]   # (back y, half w, z0, z1)
+    prof = [(0.0, 1.0, 0.0, 0.9), (3.0, 1.9, 0.0, 1.9), (8.0, 3.0, 0.0, 3.0), (16.0, 4.3, 0.0, 3.9)]   # bounding hull (back y, half w, z0, z1)
     rings = []
     for y, hw, z0, z1 in prof:
         rings.append([bm.verts.new((x, y + 2.0, z)) for x, z in ((-hw, z0), (hw, z0), (hw, z1), (-hw, z1))])
@@ -828,12 +978,20 @@ def build_spray(car, key):
     vol.inputs["Anisotropy"].default_value = 0.3
     tc = N.new("ShaderNodeTexCoord"); mp = N.new("ShaderNodeMapping"); L.new(tc.outputs["Object"], mp.inputs[0])
     drv = mp.inputs["Location"].driver_add("default_value", 1); drv.driver.expression = "-frame*1.1"
-    nz = N.new("ShaderNodeTexNoise"); nz.inputs["Scale"].default_value = 0.55; nz.inputs["Detail"].default_value = 4; L.new(mp.outputs[0], nz.inputs[0])
+    nz = N.new("ShaderNodeTexNoise"); nz.inputs["Scale"].default_value = 0.7; nz.inputs["Detail"].default_value = 5; L.new(mp.outputs[0], nz.inputs[0])
     sep = N.new("ShaderNodeSeparateXYZ"); L.new(tc.outputs["Object"], sep.inputs[0])
-    fall = world.math_node(nt, "SUBTRACT", 1.0, world.math_node(nt, "DIVIDE", world.math_node(nt, "SUBTRACT", sep.outputs[1], 2.0), 16.0), clamp=True)
-    d = world.math_node(nt, "MULTIPLY", world.math_node(nt, "POWER", nz.outputs["Fac"], 2.2), fall)
+    M_ = world.math_node
+    yy = M_(nt, "DIVIDE", M_(nt, "SUBTRACT", sep.outputs[1], 2.0), 16.0, clamp=True)                  # 0 at the gearbox .. 1 far back
+    hw = M_(nt, "ADD", 0.9, M_(nt, "MULTIPLY", yy, 3.2)); hh = M_(nt, "ADD", 0.45, M_(nt, "MULTIPLY", yy, 2.4))
+    zc = M_(nt, "ADD", 0.35, M_(nt, "MULTIPLY", yy, 0.95))
+    rx = M_(nt, "POWER", M_(nt, "DIVIDE", sep.outputs[0], hw), 2.0)
+    rz = M_(nt, "POWER", M_(nt, "DIVIDE", M_(nt, "SUBTRACT", sep.outputs[2], zc), hh), 2.0)
+    radial = M_(nt, "SUBTRACT", 1.0, M_(nt, "ADD", rx, rz), clamp=True)
+    along = M_(nt, "MULTIPLY", M_(nt, "POWER", M_(nt, "SUBTRACT", 1.0, yy), 1.3), M_(nt, "MINIMUM", M_(nt, "MULTIPLY", yy, 14.0), 1.0))
+    shape = M_(nt, "MULTIPLY", M_(nt, "POWER", radial, 1.6), along)
+    d = M_(nt, "MULTIPLY", shape, M_(nt, "POWER", nz.outputs["Fac"], 1.8))
     amt = N.new("ShaderNodeValue"); amt.name = "spray_amt"
-    L.new(world.math_node(nt, "MULTIPLY", world.math_node(nt, "MULTIPLY", d, 2.6), amt.outputs[0]), vol.inputs["Density"])
+    L.new(M_(nt, "MULTIPLY", M_(nt, "MULTIPLY", d, 2.4), amt.outputs[0]), vol.inputs["Density"])
     L.new(vol.outputs[0], out.inputs["Volume"]); me.materials.append(m)
     return o, amt
 
@@ -845,8 +1003,121 @@ for which, key in ((0, "senna"), (1, "rival")):
         st = states_at(CUT_OF[f], float(f))[which]
         v = SIMS[st[0]].v_at_s(min(max(st[1], 0), SIMS[st[0]].L)) if st else 0.0
         amt.outputs[0].default_value = float(np.clip((v - 8.0) / 40.0, 0, 1)); amt.outputs[0].keyframe_insert("default_value", frame=f)
+# ------------------------------------------------------------------ realistic audience (Rocketbox people, randomized simple gestures)
+import crowd
+QUALITY = "final" if "--final" in ARGS else "preview"
+try:
+    crowd_cam = []
+    for f in range(S["S02"][0], S["S02"][1] + 1, 5):
+        c = CUT_OF[f]
+        if c[0] == "est_crowd":
+            L = cam_pose(c, float(f))[0]; crowd_cam.append((L.x, L.y, 1.6))
+    _ok0 = crowd.Exclusions.ok
+    avoid = crowd_cam + [(x_, y_, r_ + 0.6) for x_, y_, r_ in W.structures]
+    def _ok(self, x, y, road_clear=7.0, line_clear=0.8, tree_clear=1.8):
+        if any((x - cx) ** 2 + (y - cy) ** 2 < r * r for cx, cy, r in avoid): return False
+        return _ok0(self, x, y, road_clear, line_clear, tree_clear)
+    crowd.Exclusions.ok = _ok
+    crowd.Exclusions.avoid_fn = lambda self, x, y: not any((x - cx) ** 2 + (y - cy) ** 2 < r * r for cx, cy, r in avoid)
+    AUD = crowd.build_audience(W, sc, FPS, list(range(0, NF)), [
+        ("straight_w", "Wheatcroft Straight", -1, 21, 27, 0, 165), ("straight_e", "Wheatcroft Straight", -1, 21, 27, 310, 480),
+        ("goddards", "Goddards", -1, 30, 37, 0, 95), ("melb_down", "Melbourne Loop (down)", 1, 15, 21, 0, 360),
+        ("redgate", "Redgate", -1, 18, 24, 0, 190), ("hollywood", "Hollywood", -1, 16, 22, 0, 200)],
+        quality=QUALITY, cheer_times=(9.5, 10.5, 41.0, 42.0), seed=7, spacing=0.95, density=0.42)
+    log("audience built")
+except Exception as ex:
+    import traceback; traceback.print_exc(); log("AUDIENCE FAILED", ex)
+
+
+def build_limit_sign():
+    import bmesh
+    Cs = world.coll("LIMIT_SIGN")
+    P = R["old_entry"]["P"]; t, n = world._frame(P[:, :2]); i = 24
+    base = Vector((P[i, 0] + n[i, 0] * 5.4, P[i, 1] + n[i, 1] * 5.4, 0.0)); base.z = H(base.x, base.y)
+    face = -Vector((t[i, 0], t[i, 1], 0)).normalized()          # faces the arriving cars
+    yaw = math.atan2(face.y, face.x) - math.pi / 2
+    steel = bpy.data.materials.get("armco_steel")
+    me = bpy.data.meshes.new("sign_post"); bm = bmesh.new(); bmesh.ops.create_cone(bm, cap_ends=True, segments=12, radius1=0.045, radius2=0.045, depth=2.6)
+    bm.to_mesh(me); bm.free(); me.materials.append(steel)
+    post = bpy.data.objects.new("sign_post", me); Cs.objects.link(post); post.location = base + Vector((0, 0, 1.25))
+    def disc(name, r, z, mat, dy):
+        m2 = bpy.data.meshes.new(name); bm = bmesh.new(); bmesh.ops.create_cone(bm, cap_ends=True, segments=48, radius1=r, radius2=r, depth=0.02)
+        bm.to_mesh(m2); bm.free(); m2.materials.append(mat)
+        o = bpy.data.objects.new(name, m2); Cs.objects.link(o)
+        o.location = base + Vector((0, 0, z)) + face * dy; o.rotation_euler = (math.pi / 2, 0, yaw); return o
+    disc("sign_ring", 0.42, 2.35, world.flat_mat("sign_red", (0.6, 0.02, 0.02), rough=0.35), 0.06)
+    disc("sign_face", 0.33, 2.35, world.flat_mat("sign_white", (0.85, 0.85, 0.85), rough=0.35), 0.075)
+    cu = bpy.data.curves.new("sign_txt", "FONT"); cu.body = "80"; cu.font = FONT; cu.size = 0.34; cu.align_x = "CENTER"; cu.align_y = "CENTER"
+    tx = bpy.data.objects.new("sign_txt", cu); Cs.objects.link(tx); cu.materials.append(world.flat_mat("sign_black", (0.01, 0.01, 0.01), rough=0.5))
+    tx.location = base + Vector((0, 0, 2.35)) + face * 0.09; tx.rotation_euler = (math.pi / 2, 0, yaw)
+    plate = bpy.data.meshes.new("sign_plate"); bm = bmesh.new(); bmesh.ops.create_cube(bm, size=1.0); bm.to_mesh(plate); bm.free()
+    plate.materials.append(world.flat_mat("sign_blue", (0.02, 0.06, 0.25), rough=0.4))
+    pl = bpy.data.objects.new("sign_plate", plate); Cs.objects.link(pl); pl.scale = (0.9, 0.02, 0.26)
+    pl.location = base + Vector((0, 0, 1.78)) + face * 0.07; pl.rotation_euler = (0, 0, yaw)
+    cu2 = bpy.data.curves.new("sign_txt2", "FONT"); cu2.body = "PIT LANE"; cu2.font = FONT; cu2.size = 0.17; cu2.align_x = "CENTER"; cu2.align_y = "CENTER"
+    t2 = bpy.data.objects.new("sign_txt2", cu2); Cs.objects.link(t2); cu2.materials.append(world.flat_mat("sign_white2", (0.9, 0.9, 0.9), rough=0.4))
+    t2.location = base + Vector((0, 0, 1.78)) + face * 0.095; t2.rotation_euler = (math.pi / 2, 0, yaw)
+    f0, f1 = S["S14"][0], S["S14"][1]
+    for o in Cs.objects:                      # 1994: only in the speed-limit shot
+        for fr, hid in ((0, True), (f0, False), (f1 + 1, True)):
+            o.hide_render = hid; o.keyframe_insert("hide_render", frame=fr)
+
+
+build_limit_sign()
 RAIN = build_rain()
+for fr, hid in ((0, False), (S["S07"][0] + 45, True), (S["S12"][0] + 30, False)):
+    RAIN.hide_render = hid; RAIN.keyframe_insert("hide_render", frame=fr)
 KWR.write(); log("keys written, rain + spray")
+
+# ------------------------------------------------------------------ QA: physics, boundaries, clearances on EVERY frame
+def qa_report():
+    from mathutils.bvhtree import BVHTree
+    rep = {"car_crew": [], "car_car": [], "car_barrier": [], "cam_ground": [], "cam_geometry": []}
+    def rect(M, half=(1.0, 2.2)):
+        return [M @ Vector((sx * half[0], sy * half[1], 0)) for sx in (-1, 1) for sy in (-1, 1)]
+    def seg_dist(p, a, b):
+        ab = b - a; t = max(0.0, min(1.0, (p - a).dot(ab) / max(ab.length_squared, 1e-9))); return (a + ab * t - p).length
+    def rect_point(M, p, half=(1.0, 2.2)):
+        q = M.inverted() @ Vector((p.x, p.y, M.translation.z))
+        dx = max(abs(q.x) - half[0], 0.0); dy = max(abs(q.y) - half[1], 0.0); return math.hypot(dx, dy)
+    crew_pts = [Vector((p.x, p.y, 0)) for _, p, _ in (SPOTS or [])]
+    prop_pts = [o.matrix_world.translation.copy() for o in bpy.data.collections.get("PIT_PROPS").objects] if bpy.data.collections.get("PIT_PROPS") else []
+    lines = [np.array(W.resample(w["pts"], 0.5)) for w in W.ways if w["kind"] in ("barrier=wall", "barrier=guard_rail", "barrier=tyres", "barrier=fence")]
+    LP = np.vstack(lines) if lines else np.zeros((0, 2))
+    dg = bpy.context.evaluated_depsgraph_get()
+    static = [o for o in bpy.data.objects if o.type == "MESH" and o.name in ("terrain", "walls", "armco_rails", "armco_posts",
+              "catch_fence_posts", "buildings", "pit_garages", "stand_terraces", "stand_steel", "stand_roof", "hoardings")]
+    sb = [(o.name, BVHTree.FromObject(o, dg)) for o in static]
+    terr = dict(sb)["terrain"]
+    for f in range(NF):
+        cut = CUT_OF[f]
+        M0 = car_matrix(0, cut, float(f)); M1 = car_matrix(1, cut, float(f))
+        if M0 is not None and S["S03"][0] <= f <= S["S06"][1]:
+            for p in crew_pts + [Vector((q.x, q.y, 0)) for q in prop_pts]:
+                d = rect_point(M0, p)
+                if d < 1.0: rep["car_crew"].append((f, round(d, 2)))
+        if M0 is not None and M1 is not None:
+            d = min(rect_point(M0, c) for c in rect(M1))
+            if d < 0.6: rep["car_car"].append((f, round(d, 2)))
+        for M in (M0, M1):
+            if M is None or not len(LP): continue
+            for c in rect(M, (1.0, 2.25)):
+                dmin = float(np.min(np.hypot(LP[:, 0] - c.x, LP[:, 1] - c.y)))
+                if dmin < 0.25: rep["car_barrier"].append((f, round(dmin, 2))); break
+        cl = CAMLOG.get(f)
+        if cl and cl["cut"] not in ("map", "chase_entry"):
+            L = Vector(cl["loc"]); hit = terr.ray_cast(L + Vector((0, 0, 500)), Vector((0, 0, -1)))
+            if hit[0] is not None and L.z - hit[0].z < 0.5: rep["cam_ground"].append((f, round(L.z - hit[0].z, 2)))
+            for nm, b in sb:
+                nf = b.find_nearest(L, 0.3)
+                if nf[0] is not None: rep["cam_geometry"].append((f, nm, round(nf[3], 2))); break
+    summary = {k: len(v) for k, v in rep.items()}
+    json.dump({"summary": summary, "details": {k: v[:60] for k, v in rep.items()}}, open(os.path.join(VD, "build", "qa.json"), "w"), indent=1)
+    log("QA", summary)
+    return rep
+
+
+QA = qa_report()
 
 # ------------------------------------------------------------------ render settings (Cycles; preview by default)
 def render_settings(q="preview"):
@@ -878,6 +1149,8 @@ if SHEET:
     picks = [("hook", 40), ("split", 150), ("est_air", 230), ("est_crowd", 320), ("chase_entry", 430), ("box_wait", 520),
              ("box_pass", 568), ("pit_side", 650), ("rise", 760), ("map", 900), ("map", 1060), ("map", 1150),
              ("descend", 1235), ("track_side", 1300), ("hero_slow", 1400), ("drone", 1480), ("limit", 1580), ("return", 1650)]
+    want = os.environ.get("SHEET_PICKS")
+    if want: picks = [p_ for p_ in picks if p_[0] in want.split(",")]
     for nm, f in picks:
         sc.frame_set(f); sc.render.filepath = os.path.join(SHEET, f"{f:05d}_{nm}.jpg")
         t = time.time(); bpy.ops.render.render(write_still=True); log("sheet", nm, f, round(time.time() - t, 1), "s")
