@@ -8,3 +8,5 @@ data/*.npy
 data/*.osm
 *.blend
 *.blend1
+__pycache__/
+*.pyc
