@@ -606,12 +606,13 @@ def xray_group(car, color=(0.55, 0.85, 1.0)):
     tc = N.new("ShaderNodeTexCoord"); tc.object = car.root
     sep = N.new("ShaderNodeSeparateXYZ"); Ln.new(tc.outputs["Object"], sep.inputs[0])
     val = N.new("ShaderNodeValue"); val.name = "wipe"; val.label = "wipe"; val.outputs[0].default_value = 0.0
-    # p: 0 at the front bumper .. 1 at the rear; factor = clamp((wipe*1.35 - p) / 0.25)
+    # p: 0 at the front bumper .. 1 at the rear; factor = clamp((wipe*1.1 - p) / 0.08): a thin scan line, not a wide
+    # band (a wide paint/ghost blend reads as a white smear)
     mp = N.new("ShaderNodeMapRange"); mp.inputs["From Min"].default_value = car.front_y; mp.inputs["From Max"].default_value = car.rear_y
     Ln.new(sep.outputs["Y"], mp.inputs["Value"])
-    mul = N.new("ShaderNodeMath"); mul.operation = "MULTIPLY"; mul.inputs[1].default_value = 1.35; Ln.new(val.outputs[0], mul.inputs[0])
+    mul = N.new("ShaderNodeMath"); mul.operation = "MULTIPLY"; mul.inputs[1].default_value = 1.1; Ln.new(val.outputs[0], mul.inputs[0])
     sub = N.new("ShaderNodeMath"); sub.operation = "SUBTRACT"; Ln.new(mul.outputs[0], sub.inputs[0]); Ln.new(mp.outputs[0], sub.inputs[1])
-    fac = N.new("ShaderNodeMapRange"); fac.inputs["From Min"].default_value = 0.0; fac.inputs["From Max"].default_value = 0.25
+    fac = N.new("ShaderNodeMapRange"); fac.inputs["From Min"].default_value = 0.0; fac.inputs["From Max"].default_value = 0.08
     Ln.new(sub.outputs[0], fac.inputs["Value"])
     # edge glow 4f(1-f)
     one = N.new("ShaderNodeMath"); one.operation = "SUBTRACT"; one.inputs[0].default_value = 1.0; Ln.new(fac.outputs[0], one.inputs[1])
@@ -624,7 +625,7 @@ def xray_group(car, color=(0.55, 0.85, 1.0)):
     ends = N.new("ShaderNodeMapRange"); ends.interpolation_type = "SMOOTHSTEP"; ends.clamp = True
     ends.inputs["From Min"].default_value = 0.0; ends.inputs["From Max"].default_value = 0.55; Ln.new(val.outputs[0], ends.inputs["Value"])
     edge2 = N.new("ShaderNodeMath"); edge2.operation = "MULTIPLY"; Ln.new(edge.outputs[0], edge2.inputs[0]); Ln.new(ends.outputs[0], edge2.inputs[1])
-    eg = N.new("ShaderNodeMath"); eg.operation = "MULTIPLY_ADD"; eg.inputs[1].default_value = 14.0
+    eg = N.new("ShaderNodeMath"); eg.operation = "MULTIPLY_ADD"; eg.inputs[1].default_value = 6.0
     Ln.new(edge2.outputs[0], eg.inputs[0]); Ln.new(rim.outputs[0], eg.inputs[2])
     em = N.new("ShaderNodeEmission"); em.inputs["Color"].default_value = (*color, 1); Ln.new(eg.outputs[0], em.inputs["Strength"])
     tr = N.new("ShaderNodeBsdfTransparent")
