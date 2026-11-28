@@ -2,7 +2,7 @@
     blender -b -P work/build_scene.py -- <video_dir> [--sheet out_dir]
 One render camera keyed per frame (cuts = guarded jumps, motion blur never smears across a cut), cars driven by a wet
 lap simulation on the real OSM/LIDAR track, race clock remapped per shot (narration timing), map overlay in 3D."""
-import bpy, sys, os, math, json, time, random
+import bpy, sys, os, math, json, time, random, zlib
 import numpy as np
 from mathutils import Vector, Matrix, Quaternion, Euler, noise
 
@@ -512,23 +512,19 @@ def cam_pose(cut, fv):
         M = car_matrix(0, cut, fv)
         L = M @ Vector((0.0, 0.12, 1.16)); T = M @ Vector((0.0, -12.0, 0.55))
         return L, T, 18.0, Vector(M.col[2][:3]), ("onboard", 0.002, 0.25, 11.0)
-    if name == "box_wait":                   # handheld behind the crew in the McLaren box
-        L = BOX - BN * 4.6 + EAST * 0.15; T = BOX + BN * 14.0 + EAST * 2.2
-        L.z = W.pit_zf(BOX) + 1.45; T.z = W.pit_zf(T) + 1.0
-        return L, T, 21.0, Vector((0, 0, 1)), ("hand", 0.01, 0.35, 0.7)
-    if name == "box_pass":                   # low camera at the pit wall, fast pan with the car
-        L = BOX + BN * 8.3 + WEST * 13.0; L.z = W.pit_zf(L) + 0.85
-        base = BOX + BN * 10.5 + EAST * 45.0; base.z = W.pit_zf(base) + 0.9
-        tgt = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.1)
-        cpos, _ = car_xy_fwd(0, cut, fv)
-        passed = 0.0 if cpos is None else _sm(6.0, -6.0, (cpos - L).dot(EAST))
-        return L, base.lerp(tgt + Vector((0, 0, 0.6)), passed), 21.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.05, 1.2)
-    if name == "pit_side":                   # long lens from the far end of the pit lane (garage side): he comes flat out at us
-        # (the lane sits ~1.2 m below the straight here, so a camera across the track only sees the pit wall)
-        cend, _ = car_xy_fwd(0, cut, f1 + 16)
-        L = cend - BN * 4.5; zr = road_z(L.x, L.y, cend.z); L.z = (zr if zr is not None else W.pit_zf(L)) + 1.6
-        tgt = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.1)
-        return L, tgt + Vector((0, 0, 0.45)), 160.0, Vector((0, 0, 1)), ("tripod", 0.0, 0.02, 0.8)
+    if name == "box_wait":                   # handheld in the lane, facing the McLaren crew waiting at the box (slow creep in)
+        L = BOX + EAST * (-9.5 + 1.2 * ss(0.0, 1.0, u)) + BN * 11.8; L.z = W.pit_zf(L) + 1.45
+        T = BOX + EAST * 3.5 + BN * 5.2; T.z = W.pit_zf(T) + 1.15
+        return L, T, 38.0, Vector((0, 0, 1)), ("hand", 0.01, 0.3, 0.7)
+    if name == "box_pass":                   # beside the crew: he comes down the hill and blasts past the box; operator pans with him
+        L = BOX + EAST * -3.0 + BN * 1.4; L.z = W.pit_zf(L) + 1.5
+        tgt = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.15, shift=-0.06)
+        return L, tgt + Vector((0, 0, 0.5)), 32.0, Vector((0, 0, 1)), ("hand", 0.008, 0.25, 0.9)
+    if name == "pit_side":                   # low tracking drone on the garage side, ahead of him: flat out up the pit lane
+        # (the lane dips ~12 m to the McLaren box: fixed cameras along it only see crests and walls)
+        m = avg_pt(lambda f: car_xy_fwd(0, cut, f)[0], fv, 0.4)
+        L = m + EAST * -8.5 + BN * -6.0; L.z = m.z + 2.6
+        return L, m + Vector((0, 0, 0.35)), 30.0, Vector((0, 0, 1)), ("drone", 0.04, 0.08, 0.35)
     if name == "rise":                       # drone climbs over the pit lane to the top-down map
         k = ss(0.0, 1.0, u)
         L0 = V3(-40, 52, 24.0); T0_ = V3(60, 15, 0.0)
@@ -573,7 +569,7 @@ def cam_pose(cut, fv):
 def apply_noise(L, q, kind, fv):
     if not kind: return L, q
     k, ap, ar, hz = kind
-    dp, dr = shake(fv, ap, ar, hz, hash(k) % 97)
+    dp, dr = shake(fv, ap, ar, hz, zlib.crc32(k.encode()) % 97)     # (str hash() is salted per process)
     if k == "onboard":                                   # engine vibration: high frequency, tiny
         dp2, dr2 = shake(fv * 3.1, ap, ar * 0.6, 17.0, 5); dp += dp2; dr += dr2
     return L + dp, q @ Euler((dr.x, dr.y, dr.z * 0.5)).to_quaternion()
@@ -589,7 +585,7 @@ def key_camera():
     for fv, cut in SAMPLES:
         L, T, lens, up, kind = cam_pose(cut, fv)
         q = T if isinstance(T, Quaternion) else look_quat(L, T, up)
-        L, q = apply_noise(L, q, kind, fv)
+        L, q = apply_noise(L, q, kind, fv - NF if cut[0] == "return" else fv)   # loop: frame NF == frame 0
         if prev is not None and prev.dot(q) < 0: q = -q
         prev = q
         for i in range(3): KWR.put(CAM, "location", i, fv, L[i])
@@ -796,10 +792,29 @@ def build_crew():
     kw.write()
     for pf in perfs: pf.solve_contacts(kw, frames)
     kw.write()
-    done = set()
-    for img in bpy.data.images:
-        if "body_color" in img.name and img.name not in done:
-            recolour_overalls(img); done.add(img.name)
+    # the performer keys its IK/look controls in floor-local space (like the rig): hang them under the pit floor too,
+    # otherwise every hand/foot target sits a whole pit-floor height (~19 m) above its body (arms straight up)
+    for key, _p, _r in spots:
+        fl = bpy.data.objects[f"PIT_FLOOR_{key}"]
+        for o in bpy.data.collections[f"CTRL_{key}"].objects:
+            o.parent = fl; o.matrix_parent_inverse.identity()
+    # red team overalls: recolour a private copy of each crew body texture and SAVE it (pixels edited in memory
+    # are lost when the .blend reloads a file-based image)
+    tex_dir = os.path.join(VD, "build", "donington", "tex"); os.makedirs(tex_dir, exist_ok=True)
+    for key, _p, _r in spots:
+        rig = bpy.data.objects.get(f"{key}_rig")
+        for o in (rig.children if rig else []):
+            if o.type != "MESH": continue
+            for i, m in enumerate(o.data.materials):
+                if not (m and m.node_tree): continue
+                nodes = [n for n in m.node_tree.nodes if n.type == "TEX_IMAGE" and n.image and "body_color" in os.path.basename(n.image.filepath)]
+                if not nodes: continue
+                if m.users > 1: m = m.copy(); o.data.materials[i] = m
+                for n in [n for n in m.node_tree.nodes if n.type == "TEX_IMAGE" and n.image and "body_color" in os.path.basename(n.image.filepath)]:
+                    im = n.image.copy(); recolour_overalls(im)
+                    fp = os.path.join(tex_dir, f"{key}_overalls.png")
+                    im.filepath_raw = fp; im.file_format = "PNG"; im.save(); im.filepath = fp; im.name = f"{key}_overalls"
+                    n.image = im
     return spots
 
 
@@ -1160,6 +1175,8 @@ if SHEET:
              ("descend", 1235), ("track_side", 1300), ("hero_slow", 1400), ("drone", 1480), ("limit", 1580), ("return", 1650)]
     want = os.environ.get("SHEET_PICKS")
     if want: picks = [p_ for p_ in picks if p_[0] in want.split(",")]
+    if os.environ.get("SHEET_FRAMES"):          # e.g. "box_pass:560,box_pass:586"
+        picks = [(a, int(b)) for a, b in (x.split(":") for x in os.environ["SHEET_FRAMES"].split(","))]
     for nm, f in picks:
         sc.frame_set(f); sc.render.filepath = os.path.join(SHEET, f"{f:05d}_{nm}.jpg")
         t = time.time(); bpy.ops.render.render(write_still=True); log("sheet", nm, f, round(time.time() - t, 1), "s")

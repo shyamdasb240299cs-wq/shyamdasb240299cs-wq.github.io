@@ -20,6 +20,11 @@
 - Rain near-lens clip must scale with focal length (max(1.6, lens*0.08) m) and use the moved positions (fields re-evaluate per node)
 - Run work/qa_visibility.py after each build: real LIDAR level steps (pit lane 1.2 m below the straight) hid the car behind walls
 - Extruded walls need end caps (an open end renders as a black box)
+- Rig parented to a raised floor empty: parent its CTRL_* IK/look empties to the same floor (keys are floor-local; else arms point up)
+- Recoloured textures must be saved to a file (pixels edited on a file-based image are lost when the .blend reloads)
+- Seed noise with zlib.crc32, never str hash() (salted per process: rebuilt shots stop matching rendered ones); loop shot noise on (f - NF)
+- Look at every shot's frames mid-render (a contact sheet of rendered frames), not only sheet stills: odd shots surface early
+- Donington pit lane dips ~12 m to the box: fixed cameras see crests and walls -> low tracking drone for pit-lane speed
 
 ## Videos
 | # | folder | title | status | length |
