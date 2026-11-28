@@ -32,4 +32,4 @@
 ## Videos
 | # | folder | title | status | length |
 |---|--------|-------|--------|--------|
-| 002 | 002-senna-pitlane | The Fastest Lap Was Set In The Pit Lane | sample preview sent; smooth preview rendering | 57.7 s |
+| 002 | 002-senna-pitlane | The Fastest Lap Was Set In The Pit Lane | smooth preview sent; awaiting notes | 57.7 s |
