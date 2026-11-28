@@ -639,13 +639,6 @@ def curve_obj(name, P, z, bevel, mat, lateral=0.0):
     return o
 
 
-def text_obj(name, body, at, size, mat, z):
-    cu = bpy.data.curves.new(name, "FONT"); cu.body = body; cu.font = FONT; cu.size = size; cu.align_x = "CENTER"; cu.align_y = "CENTER"
-    cu.extrude = 0.0; o = bpy.data.objects.new(name, cu); MAPCOL.objects.link(o)
-    o.location = (at[0], at[1], z); o.rotation_euler = (0, 0, -math.pi / 2); cu.materials.append(mat)
-    return o
-
-
 def pop_keys(o, f_in, f_out=None, s=1.0):
     o.scale = (0, 0, 0); o.keyframe_insert("scale", frame=f_in - 1)
     o.scale = (1.15 * s,) * 3; o.keyframe_insert("scale", frame=f_in + 5)
@@ -705,16 +698,9 @@ def build_map():
         ug = ss(f10a, f10b, f) if f >= S["S10"][0] else 0.0
         x, y = tip(red_P, ur); ghost.location = (x, y, Z_MAP + 2.0); ghost.keyframe_insert("location", frame=f)
         x, y = tip(gold_P, ug); head.location = (x, y, Z_MAP + 3.0 + 1.5 * math.sin(f * 0.25)); head.keyframe_insert("location", frame=f)
-    pop_keys(ghost, S["S09"][0] + 2, None, 1.0); pop_keys(head, S["S10"][0], None, 1.0)
-    # labels
-    wm, _ = fade_mat("map_label", (0.95, 0.97, 1.0), 2.2); gm, _ = fade_mat("map_label_gold", (1.0, 0.78, 0.2), 6.0)
-    rm, _ = fade_mat("map_label_red", (1.0, 0.25, 0.18), 6.0)
-    tg = text_obj("lab_goddards", "GODDARDS", (200.0, -82.0), 19.0, wm, Z_MAP + 2.5); pop_keys(tg, S["S08"][0] + 18, None)
-    te = text_obj("lab_entry", "1993 PIT ENTRY", (55.0, -104.0), 17.0, wm, Z_MAP + 2.5); pop_keys(te, S["S08"][0] + 30, None)
-    t_r = text_obj("lab_red", f"{Lr:.0f} m", (150.0, 38.0), 22.0, rm, Z_MAP + 2.5); pop_keys(t_r, S["S11"][0] + 2, None)
-    t_g = text_obj("lab_gold", f"{Lg:.0f} m", (25.0, -28.0), 22.0, gm, Z_MAP + 2.5); pop_keys(t_g, S["S11"][0] + 8, None)
-    t_d = text_obj("lab_diff", f"-{round((Lr - Lg) / 10) * 10:.0f} m", (-55.0, -78.0), 44.0, gm, Z_MAP + 3.0); pop_keys(t_d, S["S11"][0] + 18, None)
-    t_n = text_obj("lab_nolimit", "NO SPEED LIMIT", (-70.0, 78.0), 16.0, wm, Z_MAP + 2.5); pop_keys(t_n, S["S11"][0] + 30, None)
+    pop_keys(ghost, S["S09"][0] + 2, S["S10"][0] + 6, 1.0)   # the red ring hands over to the head (never sits under it)
+    pop_keys(head, S["S10"][0], None, 1.0)
+    # labels: drawn in post (work/post.py map_labels), each placed clear of every line, marker, caption and UI zone
     for fnode in fade_nodes:
         for fr, v in FADE_KEYS:
             fnode.outputs[0].default_value = v; fnode.outputs[0].keyframe_insert("default_value", frame=fr)
@@ -1163,7 +1149,7 @@ def render_settings(q="preview"):
 
 render_settings("preview")
 os.makedirs(os.path.join(VD, "build", "donington"), exist_ok=True)
-json.dump({"cam": CAMLOG, "box": list(BOX), "map": {"z": Z_MAP, "alt": MAP_ALT, "len": MAP_LEN}}, open(os.path.join(VD, "build", "camlog.json"), "w"))
+json.dump({"cam": CAMLOG, "box": list(BOX), "map": {"z": Z_MAP, "alt": MAP_ALT, "len": MAP_LEN, "labels": "post"}}, open(os.path.join(VD, "build", "camlog.json"), "w"))
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(VD, "build", "donington", "scene.blend"))
 log("saved scene.blend")
 

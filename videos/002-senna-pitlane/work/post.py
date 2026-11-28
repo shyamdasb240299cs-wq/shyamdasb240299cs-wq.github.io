@@ -10,7 +10,7 @@ SKILL = os.path.abspath(os.path.join(VD, "..", "..", ".claude", "skills", "short
 sys.path.insert(0, os.path.join(SKILL, "bin"))
 import s3d_audio
 TL = json.load(open(os.path.join(VD, "build", "timeline.json"))); FPS = TL["fps"]
-CAM = json.load(open(os.path.join(VD, "build", "camlog.json")))["cam"]
+CL = json.load(open(os.path.join(VD, "build", "camlog.json"))); CAM = CL["cam"]; MAPI = CL.get("map", {})
 TR = json.load(open(os.path.join(VD, "build", "tracks.json")))
 SH = {s["id"]: (s["f0"], s["f1"]) for s in TL["shots"]}
 FR = os.path.join(VD, "build", "donington", "frames"); OUTF = os.path.join(VD, "build", "post_frames")
@@ -38,7 +38,112 @@ def project(f, P, W, H):
     return (u + 1) / 2 * W, (1 - v) / 2 * H
 
 
+def unproject(f, x, y, W, H, z):
+    """pixel (x, y) of frame f -> the world point on the plane at height z"""
+    c = CAM[str(f)]; th_v = 18.0 / c["lens"]; th_h = th_v * W / H
+    d = qmat(c["q"]) @ np.array([(2 * x / W - 1) * th_h, (1 - 2 * y / H) * th_v, -1.0])
+    return np.asarray(c["loc"]) + (z - c["loc"][2]) / d[2] * d
+
+
+def depth(f, P):
+    c = CAM[str(f)]; return float(-(qmat(c["q"]).T @ (np.asarray(P) - np.asarray(c["loc"])))[2])
+
+
 def ease(t): t = min(max(t, 0.0), 1.0); return 1 - (1 - t) ** 3
+
+
+# ---------------------------------------------------------------- map labels (2D, crisp, collision-free)
+def map_label_specs():
+    """variants (lines), colour, font size (x W), frame in, frame out, anchor = the feature it names (fraction of the
+    frame at the map's closest framing). Orientation labels leave when the head / the numbers take over."""
+    Lr, Lg = MAPI["len"]; s08, s10, s11 = SH["S08"][0], SH["S10"][0], SH["S11"][0]; f_out = SH["S12"][0] + 6
+    GOLD, RED = (255, 198, 66), (255, 104, 82)
+    return [(["GODDARDS"], WHITE, 0.044, s08 + 18, s11 + 2, (0.54, 0.04)),
+            (["1993 PIT ENTRY", "1993|PIT ENTRY"], WHITE, 0.040, s08 + 30, s10, (0.69, 0.50)),
+            ([f"-{round((Lr - Lg) / 10) * 10:.0f} m"], GOLD, 0.090, s11 + 18, f_out, (0.52, 0.56)),
+            ([f"{Lr:.0f} m"], RED, 0.056, s11 + 2, f_out, (0.33, 0.22)),
+            ([f"{Lg:.0f} m"], GOLD, 0.056, s11 + 8, f_out, (0.45, 0.40)),
+            (["NO SPEED LIMIT", "NO SPEED|LIMIT"], WHITE, 0.040, s11 + 30, f_out, (0.30, 0.55))]
+
+
+def text_size(lines, fnt):
+    bbs = [fnt.getbbox(t) for t in lines]; lh = fnt.size * 1.08
+    return max(b[2] - b[0] for b in bbs), lh * (len(lines) - 1) + (bbs[-1][3] - bbs[0][1])
+
+
+def layout_map_labels(W, H):
+    """Each label goes to the free spot nearest the feature it names: clear (with a margin) of every bright map pixel in
+    every frame it is on screen (lines, routes, the moving ring/head), of the labels it shares the screen with, of the
+    captions band and of the Shorts UI (top bar, right-hand buttons, bottom). Layout runs at 432 px wide."""
+    Wa = 432; Ha = int(round(Wa * H / W)); ref = SH["S11"][1]; zl = MAPI["z"] + 2.5
+    Pc = unproject(ref, W / 2, H / 2, W, H, zl); d_ref = depth(ref, Pc); cache = {}
+
+    def fmask(f):              # bright pixels of frame f in the reference framing (the map camera only dollies in)
+        if f not in cache:
+            p = os.path.join(FR, f"{f:05d}.jpg"); cache[f] = None
+            if os.path.exists(p):
+                im = Image.open(p).convert("L").resize((Wa, Ha)); k = depth(f, Pc) / d_ref
+                if k > 1.001:
+                    nw, nh = int(round(Wa * k)), int(round(Ha * k)); im = im.resize((nw, nh))
+                    l, t = (nw - Wa) // 2, (nh - Ha) // 2; im = im.crop((l, t, l + Wa, t + Ha))
+                cache[f] = np.asarray(im) > 60
+        return cache[f]
+
+    def box_free(mask, w, h):  # [y, x] = no True pixel in mask[y:y+h, x:x+w]
+        S = np.pad(mask.astype(np.int32).cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+        return (S[h:, w:] - S[:-h, w:] - S[h:, :-w] + S[:-h, :-w]) == 0
+
+    forb = np.zeros((Ha, Wa), bool)
+    forb[:int(0.065 * Ha)] = True; forb[int(0.70 * Ha):] = True                 # top bar; captions + bottom UI
+    forb[:, :int(0.045 * Wa)] = True; forb[:, int(0.955 * Wa):] = True
+    forb[int(0.45 * Ha):, int(0.85 * Wa):] = True                               # right-hand buttons
+    mg = round(0.014 * Wa); placed, out = [], []
+    for variants, col, size, fi, fo, anc in map_label_specs():
+        occ = np.zeros((Ha, Wa), bool)
+        for f in range(fi, min(fo, ref) + 1):
+            m = fmask(f)
+            if m is not None: occ |= m
+        for (bx0, by0, bx1, by1), pfi, pfo in placed:
+            if pfi < fo and fi < pfo: occ[max(0, by0 - 4):by1 + 4, max(0, bx0 - 4):bx1 + 4] = True
+        best = None
+        for sc in (1.0, 0.9, 0.8):
+            for vi, var in enumerate(variants):
+                lines = var.split("|"); tw, th = text_size(lines, font(size * sc * Wa)); rw, rh = int(tw) + 1, int(th) + 1
+                okf = box_free(forb, rw, rh); ok = box_free(occ, rw + 2 * mg, rh + 2 * mg); Hb, Wb = okf.shape
+                valid = np.zeros_like(okf); valid[mg:Hb - mg, mg:Wb - mg] = okf[mg:Hb - mg, mg:Wb - mg] & ok[:Hb - 2 * mg, :Wb - 2 * mg]
+                ys, xs = np.nonzero(valid)
+                if not len(xs): continue
+                cost = np.hypot(xs + rw / 2 - anc[0] * Wa, ys + rh / 2 - anc[1] * Ha) + vi * 0.02 * Wa + (1 - sc) * 0.5 * Wa
+                i = int(np.argmin(cost))
+                if best is None or cost[i] < best[0]: best = (cost[i], xs[i], ys[i], rw, rh, lines, sc)
+        if best is None:
+            print("[post] WARNING no free spot for map label", variants[0]); continue
+        _c, x, y, rw, rh, lines, sc = best; placed.append(((x, y, x + rw, y + rh), fi, fo))
+        P = unproject(ref, (x + rw / 2) / Wa * W, (y + rh / 2) / Ha * H, W, H, zl)
+        out.append({"lines": lines, "col": col, "px": size * sc * W, "fi": fi, "fo": fo, "P": P, "d_ref": depth(ref, P)})
+        print(f"[post] map label {'/'.join(lines)!r}: ({(x + rw / 2) / Wa:.2f}, {(y + rh / 2) / Ha:.2f}) x{sc}")
+    for L in out:              # sprite at the reference size: crisp text + soft glow in its own colour
+        fnt = font(L["px"]); tw, th = text_size(L["lines"], fnt); g = max(2, int(L["px"] * 0.22))
+        im = Image.new("RGBA", (int(tw) + 2 * g + 1, int(th) + 2 * g + 1), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+        y = g - fnt.getbbox(L["lines"][0])[1]
+        for t in L["lines"]:
+            b = fnt.getbbox(t); d.text((g + (tw - (b[2] - b[0])) / 2 - b[0], y), t, font=fnt, fill=(*L["col"], 255)); y += fnt.size * 1.08
+        a = np.asarray(im.filter(ImageFilter.GaussianBlur(g * 0.5))).copy(); a[..., 3] = (a[..., 3] * 0.55).astype(np.uint8)
+        L["sprite"] = Image.alpha_composite(Image.fromarray(a), im)
+    return out
+
+
+def draw_map_labels(img, f, W, H, labs):
+    for L in labs:
+        if not L["fi"] <= f <= L["fo"]: continue
+        a = min(ease((f - L["fi"]) / 7.0), ease((L["fo"] - f) / 6.0)); xy = project(f, L["P"], W, H)
+        if a <= 0.01 or xy is None: continue
+        sc = L["d_ref"] / max(1e-6, depth(f, L["P"])) * (0.82 + 0.18 * ease((f - L["fi"]) / 6.0)); sp = L["sprite"]
+        if abs(sc - 1) > 0.01: sp = sp.resize((max(1, round(sp.width * sc)), max(1, round(sp.height * sc))), Image.LANCZOS)
+        if a < 0.999:
+            arr = np.asarray(sp).copy(); arr[..., 3] = (arr[..., 3] * a).astype(np.uint8); sp = Image.fromarray(arr)
+        ov = Image.new("RGBA", img.size, (0, 0, 0, 0)); ov.paste(sp, (int(round(xy[0] - sp.width / 2)), int(round(xy[1] - sp.height / 2))))
+        img.alpha_composite(ov)
 
 
 def panel(d, box, r, fill):
@@ -107,13 +212,21 @@ def main():
     f_lap = int(round((w_min - 0.6) * FPS)) if w_min else SH["S12"][0] + 60
     w_rec = next((w["s"] for w in words if w["w"].lower().startswith("record")), None)
     f_rec = int(round(w_rec * FPS)) if w_rec else SH["S13"][0] + 60
+    labs = layout_map_labels(W, H) if MAPI.get("labels") == "post" else []
     for path in frames:
         f = int(os.path.splitext(os.path.basename(path))[0])
         img = Image.open(path).convert("RGBA")
+        if labs: draw_map_labels(img, f, W, H, labs)
         if SH["S02"][0] + 4 <= f <= SH["S02"][1] - 2: title_card(img, f, SH["S02"][0] + 4, SH["S02"][1] - 2, W, H)
         if f_lap <= f <= SH["S13"][1] - 4: lap_tag(img, f, f_lap, W, H, record_from=f_rec)
         if SH["S14"][0] + 6 <= f <= SH["S14"][1] - 2: year_card(img, f, SH["S14"][0] + 6, SH["S14"][1] - 2, W, H)
         img.convert("RGB").save(os.path.join(OUTF, os.path.basename(path)[:-4] + ".jpg"), quality=94)
+    nf = max(f1 for _f0, f1 in SH.values()) + 1; held, last = 0, None
+    for f in range(nf):              # sample render (render.py --step K): hold the last frame in gaps (ffmpeg stops at a gap)
+        dst = os.path.join(OUTF, f"{f:05d}.jpg")
+        if os.path.exists(dst): last = dst
+        elif last: shutil.copyfile(last, dst); held += 1
+    if held: print(f"[post] {held} frames held (sample render)")
     # captions (skill) at the render resolution + mix -> mp4
     brand = {"accent": "#FFD43B", "font": "Montserrat ExtraBold", "caption_size": 0.047}
     ass = s3d_audio.captions(TL, brand, os.path.join(VD, "build", "captions.ass"), (W, H))
