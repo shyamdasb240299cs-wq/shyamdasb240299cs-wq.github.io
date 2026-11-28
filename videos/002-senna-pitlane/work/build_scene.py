@@ -1059,14 +1059,14 @@ def build_limit_sign():
     disc("sign_face", 0.33, 2.35, world.flat_mat("sign_white", (0.85, 0.85, 0.85), rough=0.35), 0.075)
     cu = bpy.data.curves.new("sign_txt", "FONT"); cu.body = "80"; cu.font = FONT; cu.size = 0.34; cu.align_x = "CENTER"; cu.align_y = "CENTER"
     tx = bpy.data.objects.new("sign_txt", cu); Cs.objects.link(tx); cu.materials.append(world.flat_mat("sign_black", (0.01, 0.01, 0.01), rough=0.5))
-    tx.location = base + Vector((0, 0, 2.35)) + face * 0.09; tx.rotation_euler = (math.pi / 2, 0, yaw)
+    tx.location = base + Vector((0, 0, 2.35)) + face * 0.09; tx.rotation_euler = (math.pi / 2, 0, yaw + math.pi)   # text front = +face (else mirrored)
     plate = bpy.data.meshes.new("sign_plate"); bm = bmesh.new(); bmesh.ops.create_cube(bm, size=1.0); bm.to_mesh(plate); bm.free()
     plate.materials.append(world.flat_mat("sign_blue", (0.02, 0.06, 0.25), rough=0.4))
     pl = bpy.data.objects.new("sign_plate", plate); Cs.objects.link(pl); pl.scale = (0.9, 0.02, 0.26)
     pl.location = base + Vector((0, 0, 1.78)) + face * 0.07; pl.rotation_euler = (0, 0, yaw)
     cu2 = bpy.data.curves.new("sign_txt2", "FONT"); cu2.body = "PIT LANE"; cu2.font = FONT; cu2.size = 0.17; cu2.align_x = "CENTER"; cu2.align_y = "CENTER"
     t2 = bpy.data.objects.new("sign_txt2", cu2); Cs.objects.link(t2); cu2.materials.append(world.flat_mat("sign_white2", (0.9, 0.9, 0.9), rough=0.4))
-    t2.location = base + Vector((0, 0, 1.78)) + face * 0.095; t2.rotation_euler = (math.pi / 2, 0, yaw)
+    t2.location = base + Vector((0, 0, 1.78)) + face * 0.095; t2.rotation_euler = (math.pi / 2, 0, yaw + math.pi)
     f0, f1 = S["S14"][0], S["S14"][1]
     for o in Cs.objects:                      # 1994: only in the speed-limit shot
         for fr, hid in ((0, True), (f0, False), (f1 + 1, True)):
