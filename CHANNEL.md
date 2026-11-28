@@ -25,8 +25,11 @@
 - Seed noise with zlib.crc32, never str hash() (salted per process: rebuilt shots stop matching rendered ones); loop shot noise on (f - NF)
 - Look at every shot's frames mid-render (a contact sheet of rendered frames), not only sheet stills: odd shots surface early
 - Donington pit lane dips ~12 m to the box: fixed cameras see crests and walls -> low tracking drone for pit-lane speed
+- Map/diagram labels: draw them in post, auto-placed at the free spot nearest their feature (rendered bright pixels over every frame they show + captions/UI zones); hand-placed 3D text sat on the lines
+- FONT text rotated x=pi/2 faces -Y: use yaw + pi so it faces the viewer (signs read mirrored) - check every sign/plate close-up
+- User wants a quick full-length look: render the rest with --step 3, post holds frames -> whole sample in a third of the time; fill later
 
 ## Videos
 | # | folder | title | status | length |
 |---|--------|-------|--------|--------|
-| 002 | 002-senna-pitlane | The Fastest Lap Was Set In The Pit Lane | preview rendering | 57.7 s |
+| 002 | 002-senna-pitlane | The Fastest Lap Was Set In The Pit Lane | sample preview sent; smooth preview rendering | 57.7 s |
